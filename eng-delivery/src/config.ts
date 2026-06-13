@@ -16,6 +16,9 @@ const EnvSchema = z.object({
   LLM_MODEL: z.string().min(1).default('gemini-2.5-flash'),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
+  // 向量检索用的 embedding 模型（OpenAI 兼容）。配了 LLM_API_KEY 时用它把片段/查询向量化；
+  // 没配则用确定性哈希向量兜底（离线可测，质量有限，仅保证管线可跑）。
+  EMBEDDING_MODEL: z.string().min(1).default('text-embedding-3-small'),
   // 招标文件解析微服务（如 MinerU）。配了才会把上传的 PDF/Word 送去解析；
   // 不配则只支持直接提交纯文本（离线可用）。
   DOC_SERVICE_URL: z
@@ -34,6 +37,7 @@ export interface LlmConfig {
   apiKey?: string;
   baseUrl: string;
   model: string;
+  embeddingModel: string;
   timeoutMs: number;
   maxRetries: number;
 }
@@ -66,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       apiKey: parsed.LLM_API_KEY,
       baseUrl: parsed.LLM_BASE_URL,
       model: parsed.LLM_MODEL,
+      embeddingModel: parsed.EMBEDDING_MODEL,
       timeoutMs: parsed.LLM_TIMEOUT_MS,
       maxRetries: parsed.LLM_MAX_RETRIES,
     },

@@ -43,6 +43,30 @@ describe('事实底座 API（规则兜底离线模式）', () => {
     expect(graph.body.links.length).toBe(2);
   });
 
+  it('带引用检索 /search 溯源到原文片段', async () => {
+    const create = await request(app).post('/api/projects').send({ name: 'P' });
+    const projectId = create.body.project.id as string;
+    await request(app)
+      .post(`/api/projects/${projectId}/documents`)
+      .send({ type: 'tender', text: TENDER_TEXT });
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/search`)
+      .send({ query: '类似工程业绩要求', topK: 3 });
+    expect(res.status).toBe(200);
+    expect(res.body.engine).toBe('hash');
+    expect(res.body.hits.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.hits[0]).toHaveProperty('score');
+    expect(res.body.hits[0]).toHaveProperty('text');
+  });
+
+  it('/search 缺少 query 返回 400', async () => {
+    const create = await request(app).post('/api/projects').send({ name: 'P' });
+    const projectId = create.body.project.id as string;
+    const res = await request(app).post(`/api/projects/${projectId}/search`).send({});
+    expect(res.status).toBe(400);
+  });
+
   it('录入文档缺少 text 与 fileBase64 返回 400', async () => {
     const create = await request(app).post('/api/projects').send({ name: 'P' });
     const projectId = create.body.project.id as string;

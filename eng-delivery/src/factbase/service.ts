@@ -15,10 +15,13 @@ import type {
 import type { TenderDocParser } from '../doc/parser';
 import { chunkText } from '../doc/chunker';
 import type { Logger } from '../logger';
+import { cosineSimilarity } from '../utils/vector';
+import type { EmbeddingClient } from './embeddings';
 import type { FactExtractor } from './extractor';
 import type {
   Change,
   Chunk,
+  ChunkHit,
   Claim,
   Commitment,
   Deviation,
@@ -83,6 +86,12 @@ export interface DeviationResult {
   deviations: Deviation[];
 }
 
+export interface SearchResult {
+  engine: string;
+  query: string;
+  hits: ChunkHit[];
+}
+
 export interface ProjectGraph {
   project: Project;
   documents: ProjectDocument[];
@@ -115,6 +124,7 @@ export class FactBaseService {
     private readonly repos: FactBaseRepos,
     private readonly extractor: FactExtractor,
     private readonly parser: TenderDocParser,
+    private readonly embedder: EmbeddingClient,
     private readonly logger?: Logger,
   ) {}
 
@@ -166,6 +176,7 @@ export class FactBaseService {
         clause: c.clause,
       })),
     );
+    await this.embedChunks(chunks);
     this.repos.documents.markParsed(document.id, raw.length);
     const saved = this.repos.documents.get(document.id) ?? document;
     this.repos.events.create(projectId, 'document_ingested', {
@@ -360,6 +371,52 @@ export class FactBaseService {
         claims: claims.length,
       },
     };
+  }
+
+  /**
+   * 带引用的语义检索：把 query 向量化，在项目片段上做余弦检索，
+   * 返回带页码/条款定位与分数的命中，作为「可溯源证据」。
+   */
+  async search(
+    projectId: string,
+    query: string,
+    topK = 5,
+    documentId?: string,
+  ): Promise<SearchResult> {
+    this.getProject(projectId);
+    const chunks = this.chunksFor(projectId, documentId).filter((c) => c.embedding?.length);
+    if (chunks.length === 0) {
+      return { engine: this.embedder.name, query, hits: [] };
+    }
+    const [queryVec] = await this.embedder.embed([query]);
+    const hits: ChunkHit[] = chunks
+      .map((c) => ({
+        id: c.id,
+        documentId: c.documentId,
+        page: c.page,
+        clause: c.clause,
+        text: c.text,
+        score: cosineSimilarity(queryVec, c.embedding ?? []),
+      }))
+      .filter((h) => h.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, topK));
+    return { engine: this.embedder.name, query, hits };
+  }
+
+  /** 为片段计算并持久化向量；失败只记日志，不阻断录入（检索时自然跳过无向量片段）。 */
+  private async embedChunks(chunks: Chunk[]): Promise<void> {
+    if (chunks.length === 0) return;
+    try {
+      const vectors = await this.embedder.embed(chunks.map((c) => c.text));
+      chunks.forEach((c, i) => {
+        const vec = vectors[i];
+        if (vec?.length) this.repos.chunks.setEmbedding(c.id, vec);
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger?.warn({ err: msg }, '片段向量化失败，检索将跳过这些片段');
+    }
   }
 
   private chunksFor(projectId: string, documentId?: string): Chunk[] {

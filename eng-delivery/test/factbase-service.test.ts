@@ -14,6 +14,7 @@ import {
   RequirementRepository,
 } from '../src/db/factbase';
 import { TenderDocParser } from '../src/doc/parser';
+import { HashEmbeddingClient } from '../src/factbase/embeddings';
 import { RuleFactExtractor } from '../src/factbase/extractor';
 import { FactBaseService } from '../src/factbase/service';
 
@@ -34,6 +35,7 @@ function buildService(db: Db): FactBaseService {
     },
     new RuleFactExtractor(),
     new TenderDocParser({ timeoutMs: 1000 }),
+    new HashEmbeddingClient(),
   );
 }
 
@@ -114,5 +116,29 @@ describe('FactBaseService 事实图谱编排（规则兜底离线）', () => {
 
   it('未知项目抛 404', async () => {
     await expect(service.extractRequirements('no-project')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('带引用检索：命中相关片段并溯源到条款，按分数倒序', async () => {
+    const project = service.createProject({ name: 'P' });
+    await service.ingestDocument(project.id, {
+      type: 'tender',
+      text: `${REQ_A}。\n\n${REQ_B}。`,
+    });
+    const { hits, engine } = await service.search(project.id, '类似工程业绩要求', 5);
+    expect(engine).toBe('hash');
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    // 最相关命中应是“业绩”那条
+    expect(hits[0].text).toContain('业绩');
+    expect(hits[0].score).toBeGreaterThan(0);
+    // 分数倒序
+    for (let i = 1; i < hits.length; i++) {
+      expect(hits[i - 1].score).toBeGreaterThanOrEqual(hits[i].score);
+    }
+  });
+
+  it('无匹配/空库检索返回空命中', async () => {
+    const project = service.createProject({ name: 'P' });
+    const res = await service.search(project.id, '任意查询', 5);
+    expect(res.hits).toHaveLength(0);
   });
 });

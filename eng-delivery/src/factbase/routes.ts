@@ -6,6 +6,7 @@ import {
   extractScopeSchema,
   ingestDocumentSchema,
   recordChangeSchema,
+  searchSchema,
   setStatusSchema,
 } from './schemas';
 import type { FactBaseService } from './service';
@@ -85,6 +86,15 @@ export function createFactBaseRouter(service: FactBaseService): Router {
     '/projects/:id/detect-deviations',
     asyncHandler(async (req, res) => {
       res.json(await service.detectDeviations(req.params.id));
+    }),
+  );
+
+  // 带引用的语义检索（溯源到页码/条款）
+  router.post(
+    '/projects/:id/search',
+    asyncHandler(async (req, res) => {
+      const data = parseBody(searchSchema, req.body);
+      res.json(await service.search(req.params.id, data.query, data.topK, data.documentId));
     }),
   );
 

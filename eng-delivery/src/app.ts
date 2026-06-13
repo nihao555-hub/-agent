@@ -25,6 +25,7 @@ import {
 } from './db/repositories';
 import { TenderDocParser } from './doc/parser';
 import { createEngine } from './engine';
+import { createEmbeddingClient } from './factbase/embeddings';
 import { createFactExtractor } from './factbase/extractor';
 import { createFactBaseRouter } from './factbase/routes';
 import { FactBaseService } from './factbase/service';
@@ -55,6 +56,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
   );
 
   const factExtractor = createFactExtractor(config, logger);
+  const embedder = createEmbeddingClient(config, logger);
   const factBase = new FactBaseService(
     {
       projects: new ProjectRepository(db),
@@ -71,6 +73,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
     },
     factExtractor,
     parser,
+    embedder,
     logger,
   );
 
