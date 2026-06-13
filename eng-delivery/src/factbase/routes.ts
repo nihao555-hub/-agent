@@ -118,6 +118,31 @@ export function createFactBaseRouter(service: FactBaseService): Router {
     }),
   );
 
+  // 启动「变更→索赔自动组卷」长流程（可断点续跑）
+  router.post(
+    '/changes/:id/claim',
+    asyncHandler(async (req, res) => {
+      const result = await service.assembleClaim(req.params.id);
+      res.status(201).json(result);
+    }),
+  );
+
+  // 断点续跑一次流程
+  router.post(
+    '/flows/:runId/resume',
+    asyncHandler(async (req, res) => {
+      res.json(await service.resumeFlow(req.params.runId));
+    }),
+  );
+
+  // 查询一次流程的运行态与各步审计
+  router.get(
+    '/flows/:runId',
+    asyncHandler(async (req, res) => {
+      res.json(service.getFlow(req.params.runId));
+    }),
+  );
+
   // 项目事实图谱
   router.get(
     '/projects/:id/graph',

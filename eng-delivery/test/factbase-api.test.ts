@@ -111,4 +111,43 @@ describe('事实底座 API（规则兜底离线模式）', () => {
     const res = await request(app).get('/api/projects/nope/graph');
     expect(res.status).toBe(404);
   });
+
+  it('变更→索赔组卷长流程：组卷 → 查询运行态 → 续跑幂等', async () => {
+    const create = await request(app).post('/api/projects').send({ name: '某管廊工程' });
+    const projectId = create.body.project.id as string;
+    await request(app)
+      .post(`/api/projects/${projectId}/documents`)
+      .send({ type: 'contract', text: '因业主原因导致的工程变更，承包人有权就工期与费用提出索赔。' });
+
+    const change = await request(app)
+      .post(`/api/projects/${projectId}/changes`)
+      .send({ title: '业主新增防水工序', description: '现场签证要求增加一道防水卷材' });
+    expect(change.status).toBe(201);
+    const changeId = change.body.change.id as string;
+
+    const claim = await request(app).post(`/api/changes/${changeId}/claim`);
+    expect(claim.status).toBe(201);
+    expect(claim.body.run.status).toBe('completed');
+    expect(claim.body.claim).toBeTruthy();
+    expect(claim.body.claim.changeId).toBe(changeId);
+    const runId = claim.body.run.id as string;
+
+    const flow = await request(app).get(`/api/flows/${runId}`);
+    expect(flow.status).toBe(200);
+    expect(flow.body.steps).toHaveLength(5);
+
+    // 已完成的 run 续跑是 no-op，仍只有一条索赔
+    const resume = await request(app).post(`/api/flows/${runId}/resume`);
+    expect(resume.status).toBe(200);
+    expect(resume.body.run.status).toBe('completed');
+    const graph = await request(app).get(`/api/projects/${projectId}/graph`);
+    expect(graph.body.claims).toHaveLength(1);
+  });
+
+  it('对不存在的变更组卷返回 404；查询不存在流程返回 404', async () => {
+    const claim = await request(app).post('/api/changes/nope/claim');
+    expect(claim.status).toBe(404);
+    const flow = await request(app).get('/api/flows/nope');
+    expect(flow.status).toBe(404);
+  });
 });

@@ -17,6 +17,7 @@ import {
   ProjectRepository,
   RequirementRepository,
 } from './db/factbase';
+import { FlowRunRepository, FlowStepRepository } from './db/flow';
 import {
   AnalysisRepository,
   CapabilityRepository,
@@ -27,6 +28,7 @@ import { TenderDocParser } from './doc/parser';
 import { DocAnalyzer } from './doc/structured';
 import { BimAnalyzer } from './bim/client';
 import { createEngine } from './engine';
+import { createClaimAssembler } from './factbase/claim/assembler';
 import { createEmbeddingClient } from './factbase/embeddings';
 import { createFactExtractor } from './factbase/extractor';
 import { createFactBaseRouter } from './factbase/routes';
@@ -61,6 +63,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
   const embedder = createEmbeddingClient(config, logger);
   const docAnalyzer = new DocAnalyzer(config.docService, logger);
   const bim = new BimAnalyzer(config.bimService, logger);
+  const assembler = createClaimAssembler(config, logger);
   const factBase = new FactBaseService(
     {
       projects: new ProjectRepository(db),
@@ -74,11 +77,14 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
       claims: new ClaimRepository(db),
       links: new LinkRepository(db),
       events: new ProjectEventRepository(db),
+      flowRuns: new FlowRunRepository(db),
+      flowSteps: new FlowStepRepository(db),
     },
     factExtractor,
     docAnalyzer,
     embedder,
     bim,
+    assembler,
     logger,
   );
 

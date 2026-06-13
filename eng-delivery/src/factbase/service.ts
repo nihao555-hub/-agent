@@ -12,12 +12,18 @@ import type {
   ProjectRepository,
   RequirementRepository,
 } from '../db/factbase';
+import type { FlowRunRepository, FlowStepRepository } from '../db/flow';
 import { summarizeBimModel } from '../bim/client';
 import type { BimAnalyzer } from '../bim/client';
 import { chunkBlocks } from '../doc/chunker';
 import type { DocAnalyzer } from '../doc/structured';
+import { FlowOrchestrator } from '../flow/orchestrator';
+import type { FlowStepDefinition } from '../flow/orchestrator';
+import type { FlowRun, FlowStep } from '../flow/types';
 import type { Logger } from '../logger';
 import { cosineSimilarity } from '../utils/vector';
+import type { ClaimAssembler } from './claim/assembler';
+import { buildClaimFlow, CLAIM_FLOW_KIND } from './claim/flow';
 import type { EmbeddingClient } from './embeddings';
 import type { FactExtractor } from './extractor';
 import type {
@@ -49,6 +55,8 @@ export interface FactBaseRepos {
   claims: ClaimRepository;
   links: LinkRepository;
   events: ProjectEventRepository;
+  flowRuns: FlowRunRepository;
+  flowSteps: FlowStepRepository;
 }
 
 export interface CreateProjectInput {
@@ -101,6 +109,13 @@ export interface SearchResult {
   hits: ChunkHit[];
 }
 
+/** 一次长流程（变更→索赔组卷）的运行视图：run + 各步审计 + 产出的索赔（若已组卷）。 */
+export interface ClaimFlowResult {
+  run: FlowRun;
+  steps: FlowStep[];
+  claim?: Claim;
+}
+
 export interface ProjectGraph {
   project: Project;
   documents: ProjectDocument[];
@@ -129,14 +144,19 @@ export interface ProjectGraph {
  * 本服务只负责把结果落库并连成图（写 node + link + 事件），每条结论都带原文出处(chunk)。
  */
 export class FactBaseService {
+  private readonly orchestrator: FlowOrchestrator;
+
   constructor(
     private readonly repos: FactBaseRepos,
     private readonly extractor: FactExtractor,
     private readonly docAnalyzer: DocAnalyzer,
     private readonly embedder: EmbeddingClient,
     private readonly bim: BimAnalyzer,
+    private readonly assembler: ClaimAssembler,
     private readonly logger?: Logger,
-  ) {}
+  ) {
+    this.orchestrator = new FlowOrchestrator(repos.flowRuns, repos.flowSteps, logger);
+  }
 
   createProject(input: CreateProjectInput): Project {
     const project = this.repos.projects.create(input);
@@ -377,6 +397,64 @@ export class FactBaseService {
     }
     this.repos.events.create(projectId, 'change_recorded', { changeId: change.id, title: input.title });
     return change;
+  }
+
+  /**
+   * 启动「变更→索赔自动组卷」长流程：建 run + 各步落库，随后执行到完成或在失败处停下（可续跑）。
+   * 全流程：范围认定→归集合同依据(RAG)→影响量化→起草正文→组卷连边。每步状态持久化，崩溃可恢复。
+   */
+  async assembleClaim(changeId: string): Promise<ClaimFlowResult> {
+    const change = this.repos.changes.get(changeId);
+    if (!change) throw new HttpError(404, `变更不存在: ${changeId}`);
+    const steps = this.claimFlowDefs();
+    const run = this.orchestrator.start({
+      projectId: change.projectId,
+      kind: CLAIM_FLOW_KIND,
+      subjectType: 'change',
+      subjectId: change.id,
+      engine: this.assembler.name,
+      steps,
+    });
+    const finished = await this.orchestrator.resume(run.id, steps);
+    return this.flowResult(finished);
+  }
+
+  /** 断点续跑一次已存在的流程（从落库 cursor 继续，已完成步骤不重跑，幂等不产生重复索赔）。 */
+  async resumeFlow(runId: string): Promise<ClaimFlowResult> {
+    const run = this.repos.flowRuns.get(runId);
+    if (!run) throw new HttpError(404, `流程不存在: ${runId}`);
+    if (run.kind !== CLAIM_FLOW_KIND) {
+      throw new HttpError(400, `暂不支持续跑该类型流程: ${run.kind}`);
+    }
+    const finished = await this.orchestrator.resume(runId, this.claimFlowDefs());
+    return this.flowResult(finished);
+  }
+
+  /** 查询一次流程的运行态与各步审计（含已组卷的索赔）。 */
+  getFlow(runId: string): ClaimFlowResult {
+    const run = this.repos.flowRuns.get(runId);
+    if (!run) throw new HttpError(404, `流程不存在: ${runId}`);
+    return this.flowResult(run);
+  }
+
+  /** 用当前注入的组卷器与检索能力构造「变更→索赔」流程定义。 */
+  private claimFlowDefs(): FlowStepDefinition[] {
+    return buildClaimFlow({
+      changes: this.repos.changes,
+      claims: this.repos.claims,
+      evidences: this.repos.evidences,
+      links: this.repos.links,
+      events: this.repos.events,
+      assembler: this.assembler,
+      retrieve: (projectId, query, topK) => this.search(projectId, query, topK).then((r) => r.hits),
+    });
+  }
+
+  private flowResult(run: FlowRun): ClaimFlowResult {
+    const steps = this.repos.flowSteps.listByRun(run.id);
+    const claimId = (run.state as { claimId?: string }).claimId;
+    const claim = claimId ? this.repos.claims.get(claimId) : undefined;
+    return { run, steps, claim };
   }
 
   /** 返回项目的完整事实图谱（结点 + 边 + 事件 + 统计）。 */

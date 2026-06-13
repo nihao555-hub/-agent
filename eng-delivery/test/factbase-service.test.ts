@@ -13,8 +13,10 @@ import {
   ProjectRepository,
   RequirementRepository,
 } from '../src/db/factbase';
+import { FlowRunRepository, FlowStepRepository } from '../src/db/flow';
 import { BimAnalyzer, type BimModel } from '../src/bim/client';
 import { DocAnalyzer } from '../src/doc/structured';
+import { RuleClaimAssembler } from '../src/factbase/claim/assembler';
 import { HashEmbeddingClient } from '../src/factbase/embeddings';
 import { RuleFactExtractor } from '../src/factbase/extractor';
 import { FactBaseService } from '../src/factbase/service';
@@ -43,11 +45,14 @@ function buildService(db: Db, bim: BimAnalyzer = new BimAnalyzer({ timeoutMs: 10
       claims: new ClaimRepository(db),
       links: new LinkRepository(db),
       events: new ProjectEventRepository(db),
+      flowRuns: new FlowRunRepository(db),
+      flowSteps: new FlowStepRepository(db),
     },
     new RuleFactExtractor(),
     new DocAnalyzer({ timeoutMs: 1000 }),
     new HashEmbeddingClient(),
     bim,
+    new RuleClaimAssembler(),
   );
 }
 

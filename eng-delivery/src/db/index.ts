@@ -179,6 +179,32 @@ CREATE TABLE IF NOT EXISTS project_events (
   created_at TEXT NOT NULL
 );
 
+-- ===== 长流程编排（durable / 可断点续跑）=====
+-- 一次长流程执行：变更→索赔组卷等多步骤慢任务。崩溃/重启后凭此恢复。
+CREATE TABLE IF NOT EXISTS flow_runs (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id),
+  kind         TEXT NOT NULL,
+  subject_type TEXT NOT NULL,
+  subject_id   TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  data         TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+
+-- 长流程中的每一步：持久化状态/输出，便于审计与续跑。
+CREATE TABLE IF NOT EXISTS flow_steps (
+  id         TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL REFERENCES flow_runs(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  ordinal    INTEGER NOT NULL,
+  name       TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending',
+  data       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tenders_created ON tenders(created_at);
 CREATE INDEX IF NOT EXISTS idx_analyses_tender ON analyses(tender_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_tender ON events(tender_id, created_at);
@@ -194,6 +220,9 @@ CREATE INDEX IF NOT EXISTS idx_claims_project ON claims(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_links_project ON links(project_id);
 CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_type, from_id);
 CREATE INDEX IF NOT EXISTS idx_project_events_project ON project_events(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_flow_runs_project ON flow_runs(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_flow_runs_subject ON flow_runs(subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS idx_flow_steps_run ON flow_steps(run_id, ordinal);
 `;
 
 /**
