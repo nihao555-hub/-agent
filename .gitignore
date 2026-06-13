@@ -5,3 +5,9 @@ coverage/
 .env
 .env.local
 .DS_Store
+
+# Python (microservices)
+__pycache__/
+*.pyc
+.venv/
+venv/

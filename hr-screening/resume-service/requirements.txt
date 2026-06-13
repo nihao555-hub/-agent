@@ -1,0 +1,6 @@
+# resume-service：仅列出本微服务自身依赖。
+# SmartResume 本体的依赖请在其工程目录单独安装：
+#   cd $SMARTRESUME_HOME && pip install -r requirements.txt && pip install -e .
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9
