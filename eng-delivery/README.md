@@ -92,6 +92,9 @@ curl -X POST localhost:3002/api/analyze \
 | `POST /api/projects/:id/detect-deviations` | 偏离检测（要求 ↔ 承诺），未响应的强制要求标 `at_risk` |
 | `POST /api/projects/:id/search` | **带引用的语义检索**，命中片段溯源到页码/条款（`engine: openai`/`hash`） |
 | `POST /api/projects/:id/changes` | 记录变更/签证 |
+| `POST /api/changes/:id/claim` | 启动「变更→索赔自动组卷」长流程（范围认定→归集依据→影响量化→起草正文→组卷连边），可断点续跑 |
+| `POST /api/flows/:runId/resume` | 断点续跑一次长流程（从落库 cursor 继续，已完成步骤不重跑，幂等不重复组卷） |
+| `GET /api/flows/:runId` | 查询一次长流程的运行态与各步审计（含已组卷的索赔） |
 | `GET /api/projects/:id/graph` | 项目事实图谱 + 统计 + 事件链 |
 
 ## 文件解析（可选 MinerU 等微服务）
@@ -111,8 +114,11 @@ MinerU 风格的解析微服务并设置 `DOC_SERVICE_URL`；服务接收 `multi
 
 ## 持久化
 
-`better-sqlite3`，库文件路径由 `DB_PATH` 指定（目录自动创建）。表：`tenders` / `capabilities`
-/ `analyses` / `events`。测试用 `DB_PATH=:memory:` 内存库。
+`better-sqlite3`，库文件路径由 `DB_PATH` 指定（目录自动创建）。表：单文档入口
+`tenders` / `capabilities` / `analyses` / `events`；事实底座 `projects` / `documents` /
+`chunks` / `requirements` / `commitments` / `deviations` / `evidence` / `changes` / `claims`
+/ `links`（关联图谱边）/ `project_events`；长流程 `flow_runs` / `flow_steps`（运行态与各步审计，
+支撑断点续跑）。测试用 `DB_PATH=:memory:` 内存库。
 
 ## 测试 / 质量门禁
 
