@@ -1,6 +1,6 @@
 # HR 初筛 Agent 后端（hr-screening-agent）
 
-面向招聘方的「简历初筛 + 对话式初筛 + 授权式合规背调」后端。覆盖 HR 初筛从 **JD 结构化 → 简历解析 → 硬性过滤 → 多维打分排序 → AI 对话式深筛 → 初步触达 → 授权式背调** 的完整流程，并把岗位/候选人/对话会话持久化到本地 SQLite。
+面向招聘方的「简历自动归集 + 简历初筛 + 对话式初筛 + 候选人状态机/实时反馈 + 授权式合规背调」后端。覆盖 HR 初筛从 **多渠道归集 → JD 结构化 → 简历解析 → 硬性过滤 → 多维打分排序 → AI 对话式深筛 → 状态流转/实时反馈通知 → 初步触达 → 授权式背调** 的完整闭环，并把岗位/候选人/对话会话/投递/事件/通知持久化到本地 SQLite。
 
 与「AI 店小二」同仓库、同一套架构：**双引擎**——配置了大模型 key 走 LLM（grsai，OpenAI 兼容），任何失败/限流自动回退**规则引擎**；不配 key 也能离线确定性运行。所有结果带 `engine: "llm" | "rule-based"` 标注来源。
 
@@ -13,8 +13,11 @@
 | 3. 硬性条件过滤（学历/年限/城市/技能） | 内置于打分（`hardFilter`，不过则压分+建议淘汰） |
 | 4-5. 简历内容评估 + 打分/排序 | `POST /api/screening/score`、`POST /api/screening/batch` |
 | 5b. AI 对话式深筛（顶级 HR 专家、多轮上下文持久化） | `POST /api/chat/sessions`、`/messages`、`/summary` |
+| 5c. 候选人状态机 + 实时反馈（投递→初筛中→约面/淘汰/人才库 + AI 拒信/约面通知） | `POST /api/pipeline/*`（见下） |
 | 6. 初步触达（电话/短信/微信） | `POST /api/outreach` |
 | 7. 推进/淘汰 + 背调 | `POST /api/background-check/*`、`POST /api/analyze` |
+
+简历来源不限手工：可通过**批量上传 / 企业邮箱 IMAP 收件 / 文件夹监听**自动归集（`POST /api/intake/*`），自动解析→硬筛→打分→入库→按硬性条件自动流转。
 
 ## 接口一览
 
@@ -35,6 +38,19 @@
 | `GET` | `/api/chat/sessions/:id` | 取会话上下文（岗位 + 简历 + 完整历史 + 小结） |
 | `POST` | `/api/chat/sessions/:id/messages` | 候选人发一条消息 → 返回 AI 回复并累积持久化历史 |
 | `POST` | `/api/chat/sessions/:id/summary` | 出结构化初筛小结（已确认/待确认/风险/建议），回填会话并标记完成 |
+| `POST` | `/api/pipeline/jobs` | 持久化岗位（设硬性条件），返回 `jobId` |
+| `GET` | `/api/pipeline/jobs` | 列出岗位 |
+| `POST` | `/api/pipeline/applications` | 新建投递（建档：候选人 + 投递记录 `applied`） |
+| `GET` | `/api/pipeline/applications?jobId=&status=` | 看板列表（可按岗位/状态过滤） |
+| `GET` | `/api/pipeline/applications/:id` | 投递详情（岗位 + 候选人 + 事件历史 + 通知历史） |
+| `GET` | `/api/pipeline/applications/:id/events` | 事件留痕（created/screened/status_changed/notified） |
+| `POST` | `/api/pipeline/applications/:id/screen` | 自动初筛打分（硬筛 + 多维打分写回投递） |
+| `POST` | `/api/pipeline/applications/:id/transition` | 受控状态流转（非法迁移返回 409），可选 `notify` 发反馈 |
+| `POST` | `/api/pipeline/applications/:id/feedback` | 生成并发送/预览 AI 反馈通知（拒信/约面通知） |
+| `GET` | `/api/pipeline/stats?jobId=` | 流程漏斗统计（按状态计数） |
+| `POST` | `/api/intake/batch` | 批量上传多份简历 → 解析→建档→自动硬筛+打分→入库 |
+| `POST` | `/api/intake/email/poll` | 企业邮箱 IMAP 收件归集（未配置凭据时 400 安全禁用） |
+| `POST` | `/api/intake/folder/scan` | 扫描归集目录中的简历入库（未配置 `INTAKE_WATCH_DIR` 时 400） |
 
 打分维度：`岗位匹配 / 技能匹配 / 经验深度 / 稳定性 / 教育背景`。风险点：`跳槽频繁 / 空窗期 / 经历存疑 / 学历存疑 / 资历过高 / 信息缺失`。
 
@@ -49,6 +65,26 @@
 - **双引擎**：配 key 走 grsai 多轮对话，任何失败自动回退脚本化追问（规则引擎）；响应带 `engine` 标注。
 - **结构化小结**：`/summary` 基于完整对话产出 `{fitAssessment, confirmedInfo[], pendingInfo[], risks[], recommendation, reason, nextQuestions[]}`，回填会话并标记 `completed`（之后不可再发消息，返回 409）。
 - **合规约束**：不得询问婚育/家庭/健康/籍贯等与岗位无关的隐私，不承诺录用结果，不索取身份证/银行卡等敏感信息。
+
+### 候选人状态机 + 实时反馈通知（投递→初筛中→约面/淘汰/人才库）
+
+`POST /api/pipeline/*` 把候选人在流程中的位置建成一台**受控状态机**，每次流转都校验合法性并留痕，可审计、可解释：
+
+- **状态**：`applied 已投递 → screening 初筛中 → interview 约面 / rejected 未通过 / talent_pool 人才库`。非法迁移（如 `screening → applied`）返回 **409**。
+- **自动流转**：归集层自动初筛后，硬性条件通过 → `screening`，不通过 → `rejected`（不自动外发，留待 HR 复核触发）。
+- **事件历史**：`created / screened / status_changed / notified` 全程留痕。
+- **实时反馈通知**：状态流转可携带 `notify:true`，或单独调 `/feedback` 生成并发送。文案**双引擎**（LLM 拒信/约面通知，失败回退规则模板），**专业有温度、严禁歧视性理由、不承诺结果**。`preview:true` 仅预览不落库不外发。
+- **可插拔渠道**：默认 `none`（dry-run，仅落库不外发，可离线测试）；配置 SMTP 后 `email` 渠道真实发送（短信/企业微信渠道接口已留好，配置凭据后接入）。
+
+### 简历自动归集层（企业邮箱 / 批量上传 / 文件夹监听）
+
+国内主流招聘平台无面向第三方拉取候选人简历的开放 API（受 PIPL + 平台 ToS 约束），因此采用**合规归集**路线，HR 实际把各平台简历导出/转发即可：
+
+- **批量上传** `POST /api/intake/batch`：一次提交多份简历（`text` 或 `fileBase64`）→ 解析 → 建档（投递）→ 自动硬筛+打分 → 按硬性条件自动流转 → 入库，返回逐份结果汇总。
+- **企业邮箱 IMAP 收件** `POST /api/intake/email/poll`：拉取未读邮件中的简历附件/正文（`imapflow` + `mailparser`），处理后标记已读。**配齐 `IMAP_HOST/USER/PASSWORD` 才启用**，否则 400 安全禁用。
+- **文件夹归集** `POST /api/intake/folder/scan` + 实时监听：扫描/监听 `INTAKE_WATCH_DIR` 目录中的简历（`.pdf/.doc/.docx/.txt`）自动入库（已处理文件自动去重）。配齐 `INTAKE_WATCH_DIR` + `INTAKE_WATCH_JOB_ID` 时启动 `fs.watch` 实时监听。
+
+> 归集只接「HR 已合法获得的简历」，**不做爬虫/模拟登录抓取招聘平台**。
 
 ## 复用的高 star 开源项目
 
@@ -101,7 +137,13 @@ npm run build && npm start  # 生产构建后运行 dist/index.js
 | `LLM_MODEL` | `gemini-2.5-flash` | 模型名 |
 | `RESUME_SERVICE_URL` | 空 | SmartResume 解析服务地址 |
 | `OSINT_SERVICE_URL` | 空 | OSINT 收集服务地址 |
-| `DB_PATH` | `./data/hr.db` | SQLite 文件路径（持久化对话会话）；`:memory:` 为内存库 |
+| `DB_PATH` | `./data/hr.db` | SQLite 文件路径（持久化岗位/候选人/对话/投递/事件/通知）；`:memory:` 为内存库 |
+| `INTAKE_AUTO_SCREEN` | `true` | 归集后是否自动硬筛+打分 |
+| `INTAKE_WATCH_DIR` | 空 | 文件夹归集目录（扫描/监听）；留空禁用 |
+| `INTAKE_WATCH_JOB_ID` | 空 | 实时监听绑定的岗位 ID（配齐目录+此项才启动监听） |
+| `IMAP_HOST/PORT/USER/PASSWORD/TLS/MAILBOX` | 空 / `993` / `INBOX` | 企业邮箱 IMAP 收件；配齐 HOST/USER/PASSWORD 才启用 |
+| `NOTIFY_DEFAULT_CHANNEL` | `none` | 反馈渠道：`none`=dry-run 落库，`email`=SMTP 发送 |
+| `SMTP_HOST/PORT/SECURE/USER/PASSWORD/FROM` | 空 / `465` / `true` | SMTP 发件配置（`email` 渠道生效需配齐） |
 
 完整见 [`.env.example`](./.env.example)。
 
@@ -112,7 +154,7 @@ npm run typecheck     # tsc --noEmit
 npm run lint          # eslint
 npm run format:check  # prettier --check
 npm run build         # tsc -p tsconfig.build.json
-npm test              # vitest（66 个用例，规则引擎 + 内存库，离线确定性）
+npm test              # vitest（86 个用例，规则引擎 + 内存库 + dry-run 通知，离线确定性）
 ```
 
 ## 快速试用（规则引擎，离线）

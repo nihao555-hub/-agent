@@ -1,6 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatMessage, ChatRole, ChatScreeningSummary, ChatSessionStatus } from '../chat/types';
-import type { JobPosting, ResumeProfile } from '../types';
+import type {
+  Application,
+  ApplicationEvent,
+  ApplicationEventType,
+  ApplicationMeta,
+  ApplicationSource,
+  Notification,
+  NotificationChannel,
+  NotificationStatus,
+} from '../pipeline/types';
+import type { ApplicationStatus } from '../pipeline/status';
+import type { JobPosting, ResumeProfile, ScreeningResult } from '../types';
 import type { Db } from './index';
 
 function now(): string {
@@ -10,6 +21,18 @@ function now(): string {
 interface JobRow {
   id: string;
   data: string;
+}
+
+export interface JobSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+}
+
+interface JobSummaryRow {
+  id: string;
+  title: string;
+  created_at: string;
 }
 
 /** 岗位仓储：以 JSON 形式整存岗位结构，title 冗余出来便于列表展示。 */
@@ -29,6 +52,13 @@ export class JobRepository {
       | JobRow
       | undefined;
     return row ? (JSON.parse(row.data) as JobPosting) : undefined;
+  }
+
+  list(): JobSummary[] {
+    const rows = this.db
+      .prepare('SELECT id, title, created_at FROM jobs ORDER BY created_at DESC')
+      .all() as JobSummaryRow[];
+    return rows.map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at }));
   }
 }
 
@@ -188,5 +218,267 @@ export class ChatRepository {
     this.db
       .prepare('UPDATE chat_sessions SET summary = ?, status = ?, updated_at = ? WHERE id = ?')
       .run(JSON.stringify(summary), status, now(), sessionId);
+  }
+}
+
+interface RawApplicationRow {
+  id: string;
+  job_id: string;
+  candidate_id: string;
+  status: string;
+  source: string;
+  screening: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawApplicationMetaRow extends RawApplicationRow {
+  job_title: string;
+  candidate_name: string | null;
+}
+
+interface RawApplicationEventRow {
+  id: string;
+  application_id: string;
+  type: string;
+  from_status: string | null;
+  to_status: string | null;
+  detail: string;
+  created_at: string;
+}
+
+function toApplication(raw: RawApplicationRow): Application {
+  return {
+    id: raw.id,
+    jobId: raw.job_id,
+    candidateId: raw.candidate_id,
+    status: raw.status as ApplicationStatus,
+    source: raw.source as ApplicationSource,
+    screening: raw.screening ? (JSON.parse(raw.screening) as ScreeningResult) : undefined,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+  };
+}
+
+function toEvent(raw: RawApplicationEventRow): ApplicationEvent {
+  return {
+    id: raw.id,
+    applicationId: raw.application_id,
+    type: raw.type as ApplicationEventType,
+    fromStatus: (raw.from_status as ApplicationStatus | null) ?? undefined,
+    toStatus: (raw.to_status as ApplicationStatus | null) ?? undefined,
+    detail: raw.detail,
+    createdAt: raw.created_at,
+  };
+}
+
+export interface ApplicationListFilter {
+  jobId?: string;
+  status?: ApplicationStatus;
+}
+
+/** 投递仓储：管理投递记录（状态机当前态 + 初筛结论）与事件历史。 */
+export class ApplicationRepository {
+  constructor(private readonly db: Db) {}
+
+  create(input: {
+    jobId: string;
+    candidateId: string;
+    source: ApplicationSource;
+    status: ApplicationStatus;
+    screening?: ScreeningResult;
+  }): Application {
+    const id = randomUUID();
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO applications (id, job_id, candidate_id, status, source, screening, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.jobId,
+        input.candidateId,
+        input.status,
+        input.source,
+        input.screening ? JSON.stringify(input.screening) : null,
+        ts,
+        ts,
+      );
+    return {
+      id,
+      jobId: input.jobId,
+      candidateId: input.candidateId,
+      status: input.status,
+      source: input.source,
+      screening: input.screening,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+  }
+
+  get(id: string): Application | undefined {
+    const raw = this.db.prepare('SELECT * FROM applications WHERE id = ?').get(id) as
+      | RawApplicationRow
+      | undefined;
+    return raw ? toApplication(raw) : undefined;
+  }
+
+  updateStatus(id: string, status: ApplicationStatus): void {
+    this.db
+      .prepare('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?')
+      .run(status, now(), id);
+  }
+
+  setScreening(id: string, screening: ScreeningResult): void {
+    this.db
+      .prepare('UPDATE applications SET screening = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(screening), now(), id);
+  }
+
+  list(filter: ApplicationListFilter = {}): ApplicationMeta[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.jobId) {
+      where.push('a.job_id = ?');
+      params.push(filter.jobId);
+    }
+    if (filter.status) {
+      where.push('a.status = ?');
+      params.push(filter.status);
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT a.*, j.title AS job_title, c.name AS candidate_name
+         FROM applications a
+         JOIN jobs j ON j.id = a.job_id
+         JOIN candidates c ON c.id = a.candidate_id
+         ${clause}
+         ORDER BY a.updated_at DESC`,
+      )
+      .all(...params) as RawApplicationMetaRow[];
+    return rows.map((raw) => {
+      const screening = raw.screening ? (JSON.parse(raw.screening) as ScreeningResult) : undefined;
+      return {
+        id: raw.id,
+        jobId: raw.job_id,
+        jobTitle: raw.job_title,
+        candidateId: raw.candidate_id,
+        candidateName: raw.candidate_name ?? undefined,
+        status: raw.status as ApplicationStatus,
+        source: raw.source as ApplicationSource,
+        matchScore: screening?.matchScore,
+        recommendation: screening?.recommendation,
+        createdAt: raw.created_at,
+        updatedAt: raw.updated_at,
+      };
+    });
+  }
+
+  addEvent(input: {
+    applicationId: string;
+    type: ApplicationEventType;
+    fromStatus?: ApplicationStatus;
+    toStatus?: ApplicationStatus;
+    detail: string;
+  }): ApplicationEvent {
+    const id = randomUUID();
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO application_events (id, application_id, type, from_status, to_status, detail, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.applicationId,
+        input.type,
+        input.fromStatus ?? null,
+        input.toStatus ?? null,
+        input.detail,
+        ts,
+      );
+    return {
+      id,
+      applicationId: input.applicationId,
+      type: input.type,
+      fromStatus: input.fromStatus,
+      toStatus: input.toStatus,
+      detail: input.detail,
+      createdAt: ts,
+    };
+  }
+
+  listEvents(applicationId: string): ApplicationEvent[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM application_events WHERE application_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(applicationId) as RawApplicationEventRow[];
+    return rows.map(toEvent);
+  }
+}
+
+interface RawNotificationRow {
+  id: string;
+  application_id: string;
+  channel: string;
+  recipient: string;
+  subject: string | null;
+  body: string;
+  status: string;
+  engine: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+function toNotification(raw: RawNotificationRow): Notification {
+  return {
+    id: raw.id,
+    applicationId: raw.application_id,
+    channel: raw.channel as NotificationChannel,
+    recipient: raw.recipient,
+    subject: raw.subject ?? undefined,
+    body: raw.body,
+    status: raw.status as NotificationStatus,
+    engine: raw.engine ?? undefined,
+    error: raw.error ?? undefined,
+    createdAt: raw.created_at,
+  };
+}
+
+/** 通知仓储：记录每一次对候选人的反馈通知（含 dry-run）。 */
+export class NotificationRepository {
+  constructor(private readonly db: Db) {}
+
+  create(input: Omit<Notification, 'id' | 'createdAt'>): Notification {
+    const id = randomUUID();
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO notifications (id, application_id, channel, recipient, subject, body, status, engine, error, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.applicationId,
+        input.channel,
+        input.recipient,
+        input.subject ?? null,
+        input.body,
+        input.status,
+        input.engine ?? null,
+        input.error ?? null,
+        ts,
+      );
+    return { id, createdAt: ts, ...input };
+  }
+
+  listByApplication(applicationId: string): Notification[] {
+    const rows = this.db
+      .prepare('SELECT * FROM notifications WHERE application_id = ? ORDER BY created_at ASC')
+      .all(applicationId) as RawNotificationRow[];
+    return rows.map(toNotification);
   }
 }
