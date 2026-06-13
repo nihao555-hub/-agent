@@ -5,6 +5,19 @@ import { pinoHttp } from 'pino-http';
 import type { AppConfig } from './config';
 import { openDatabase } from './db';
 import {
+  ChangeRepository,
+  ChunkRepository,
+  ClaimRepository,
+  CommitmentRepository,
+  DeviationRepository,
+  DocumentRepository,
+  EvidenceRepository,
+  LinkRepository,
+  ProjectEventRepository,
+  ProjectRepository,
+  RequirementRepository,
+} from './db/factbase';
+import {
   AnalysisRepository,
   CapabilityRepository,
   EventRepository,
@@ -12,6 +25,9 @@ import {
 } from './db/repositories';
 import { TenderDocParser } from './doc/parser';
 import { createEngine } from './engine';
+import { createFactExtractor } from './factbase/extractor';
+import { createFactBaseRouter } from './factbase/routes';
+import { FactBaseService } from './factbase/service';
 import { logger as defaultLogger, type Logger } from './logger';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { createRouter } from './routes';
@@ -38,6 +54,26 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
     logger,
   );
 
+  const factExtractor = createFactExtractor(config, logger);
+  const factBase = new FactBaseService(
+    {
+      projects: new ProjectRepository(db),
+      documents: new DocumentRepository(db),
+      chunks: new ChunkRepository(db),
+      requirements: new RequirementRepository(db),
+      commitments: new CommitmentRepository(db),
+      deviations: new DeviationRepository(db),
+      evidences: new EvidenceRepository(db),
+      changes: new ChangeRepository(db),
+      claims: new ClaimRepository(db),
+      links: new LinkRepository(db),
+      events: new ProjectEventRepository(db),
+    },
+    factExtractor,
+    parser,
+    logger,
+  );
+
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -58,6 +94,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
   });
 
   app.use('/api', createRouter(service));
+  app.use('/api', createFactBaseRouter(factBase));
 
   app.use(notFoundHandler);
   app.use(errorHandler(logger));
