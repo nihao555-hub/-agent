@@ -31,6 +31,7 @@ import { createEngine } from './engine';
 import { createClaimAssembler } from './factbase/claim/assembler';
 import { createEmbeddingClient } from './factbase/embeddings';
 import { createFactExtractor } from './factbase/extractor';
+import { createRagRetriever } from './factbase/ragflow';
 import { createFactBaseRouter } from './factbase/routes';
 import { FactBaseService } from './factbase/service';
 import { logger as defaultLogger, type Logger } from './logger';
@@ -64,6 +65,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
   const docAnalyzer = new DocAnalyzer(config.docService, logger);
   const bim = new BimAnalyzer(config.bimService, logger);
   const assembler = createClaimAssembler(config, logger);
+  const retriever = createRagRetriever(config, logger);
   const factBase = new FactBaseService(
     {
       projects: new ProjectRepository(db),
@@ -86,6 +88,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
     bim,
     assembler,
     logger,
+    retriever,
   );
 
   const app = express();
@@ -104,6 +107,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
       model: config.llm.enabled ? config.llm.model : null,
       docService: config.docService.url ? 'configured' : 'text-only',
       bimService: config.bimService.url ? 'configured' : 'disabled',
+      ragEngine: config.ragflow.enabled ? 'ragflow' : 'builtin-vector',
       storage: config.db.path === ':memory:' ? 'memory' : 'sqlite',
     });
   });
