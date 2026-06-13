@@ -150,10 +150,22 @@ interface AspectHit {
 }
 
 const ASPECT_RULES: { key: string; label: string; keywords: string[] }[] = [
-  { key: 'taste', label: '口味', keywords: ['难吃', '不好吃', '太咸', '太淡', '味道', '口味', '好吃'] },
-  { key: 'service', label: '服务态度', keywords: ['服务', '态度', '冷漠', '爱搭不理', '热情', '店员'] },
+  {
+    key: 'taste',
+    label: '口味',
+    keywords: ['难吃', '不好吃', '太咸', '太淡', '味道', '口味', '好吃'],
+  },
+  {
+    key: 'service',
+    label: '服务态度',
+    keywords: ['服务', '态度', '冷漠', '爱搭不理', '热情', '店员'],
+  },
   { key: 'wait', label: '出餐/等待', keywords: ['等', '慢', '排队', '上菜', '等位', '催'] },
-  { key: 'hygiene', label: '环境卫生', keywords: ['脏', '卫生', '苍蝇', '头发', '不干净', '干净', '环境'] },
+  {
+    key: 'hygiene',
+    label: '环境卫生',
+    keywords: ['脏', '卫生', '苍蝇', '头发', '不干净', '干净', '环境'],
+  },
   { key: 'price', label: '价格', keywords: ['贵', '价格', '性价比', '划算', '不值'] },
 ];
 
@@ -193,7 +205,9 @@ function buildReply(shop: ShopProfile, review: Review, sentiment: Sentiment): Re
 
   if (sentiment === 'positive') {
     const aspectPraise =
-      aspects.length > 0 ? `您提到的${aspects.map((a) => a.label).join('、')}，正是我们日常最用心打磨的地方。` : '';
+      aspects.length > 0
+        ? `您提到的${aspects.map((a) => a.label).join('、')}，正是我们日常最用心打磨的地方。`
+        : '';
     reply = `${opener}${aspectPraise}下次来记得试试我们的${highlight}，我们会一直保持这份用心，期待与您再次相见！`;
     actions.push('置顶/精选该好评，作为口碑展示', '邀请顾客加会员或社群，沉淀为复购客');
   } else if (sentiment === 'neutral') {
@@ -281,30 +295,35 @@ function recallMessage(
 function buildPromotions(shop: ShopProfile, count: number): PromotionPackage[] {
   const preset = presetFor(shop);
   const pc = perCapitaOf(shop);
-  const tiers: { name: string; people: number; itemCount: number; discount: number; scenario: string }[] =
-    [
-      {
-        name: `${shop.name}单人尝鲜套餐`,
-        people: 1,
-        itemCount: 2,
-        discount: 0.8,
-        scenario: '吸引新客低门槛尝鲜、提升点评曝光',
-      },
-      {
-        name: `${shop.name}双人优享套餐`,
-        people: 2,
-        itemCount: 3,
-        discount: 0.82,
-        scenario: '情侣/朋友到店的主力走量套餐',
-      },
-      {
-        name: `${shop.name}欢聚${preset.visitNoun}套餐`,
-        people: 4,
-        itemCount: 5,
-        discount: 0.78,
-        scenario: '家庭/小聚客单价拉升，凑单更划算',
-      },
-    ];
+  const tiers: {
+    name: string;
+    people: number;
+    itemCount: number;
+    discount: number;
+    scenario: string;
+  }[] = [
+    {
+      name: `${shop.name}单人尝鲜套餐`,
+      people: 1,
+      itemCount: 2,
+      discount: 0.8,
+      scenario: '吸引新客低门槛尝鲜、提升点评曝光',
+    },
+    {
+      name: `${shop.name}双人优享套餐`,
+      people: 2,
+      itemCount: 3,
+      discount: 0.82,
+      scenario: '情侣/朋友到店的主力走量套餐',
+    },
+    {
+      name: `${shop.name}欢聚${preset.visitNoun}套餐`,
+      people: 4,
+      itemCount: 5,
+      discount: 0.78,
+      scenario: '家庭/小聚客单价拉升，凑单更划算',
+    },
+  ];
 
   return tiers.slice(0, Math.max(1, Math.min(count, tiers.length))).map((tier) => {
     const items = preset.items.slice(0, tier.itemCount);
@@ -377,7 +396,9 @@ export class RuleBasedEngine implements ContentEngine {
 
   async recall(req: RecallRequest): Promise<RecallResult> {
     const segments: RecallSegmentKey[] =
-      req.segments && req.segments.length > 0 ? req.segments : ['lapsed', 'sleeping', 'new_to_repeat'];
+      req.segments && req.segments.length > 0
+        ? req.segments
+        : ['lapsed', 'sleeping', 'new_to_repeat'];
     const channel: RecallChannel = req.channel ?? '微信';
     const scripts = segments.map((seg) => recallMessage(req.shop, seg, channel));
     return { scripts };

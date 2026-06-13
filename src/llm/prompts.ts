@@ -49,7 +49,11 @@ export interface SegmentInput {
   label: string;
 }
 
-export function recallUser(shop: ShopProfile, segments: SegmentInput[], channel: RecallChannel): string {
+export function recallUser(
+  shop: ShopProfile,
+  segments: SegmentInput[],
+  channel: RecallChannel,
+): string {
   const list = segments.map((s, i) => `${i + 1}. ${s.key} —— ${s.label}`).join('\n');
   const channelRule =
     channel === '短信'
@@ -80,7 +84,11 @@ export function promotionUser(shop: ShopProfile, count: number, perCapita: numbe
 {"packages":[{"name":"套餐名","items":["项1","项2"],"originalPrice":100,"dealPrice":79,"targetScenario":"适用场景","rationale":"定价逻辑"}]}`;
 }
 
-export function contentUser(shop: ShopProfile, platforms: SocialPlatform[], topic?: string): string {
+export function contentUser(
+  shop: ShopProfile,
+  platforms: SocialPlatform[],
+  topic?: string,
+): string {
   return `${shopBlock(shop)}
 
 【任务】为该店分别创作【${platforms.join('、')}】平台的引流种草内容${topic ? `，主题：${topic}` : ''}。

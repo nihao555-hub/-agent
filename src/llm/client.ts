@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { ZodType } from 'zod';
+import type { TypeOf, ZodType } from 'zod';
 import type { Logger } from '../logger';
 
 export interface LlmClientOptions {
@@ -11,15 +11,16 @@ export interface LlmClientOptions {
   logger?: Logger;
 }
 
-export interface ChatJsonParams<T> {
+export interface ChatJsonParams<S extends ZodType> {
   system: string;
   user: string;
-  schema: ZodType<T>;
+  schema: S;
   temperature?: number;
 }
 
 /** 可重试的瞬时错误特征（grsai 代理在高频/限流时会返回 apikey error 等） */
-const TRANSIENT = /apikey error|rate|limit|timeout|timed out|temporar|overload|busy|too many|empty|503|429|500|502|504/i;
+const TRANSIENT =
+  /apikey error|rate|limit|timeout|timed out|temporar|overload|busy|too many|empty|503|429|500|502|504/i;
 
 interface ProxyErrorBody {
   error?: { message?: string; type?: string };
@@ -67,7 +68,7 @@ export class LlmClient {
     this.logger = opts.logger;
   }
 
-  async chatJson<T>(params: ChatJsonParams<T>): Promise<T> {
+  async chatJson<S extends ZodType>(params: ChatJsonParams<S>): Promise<TypeOf<S>> {
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       if (attempt > 0) await sleep(Math.min(4000, 400 * 2 ** (attempt - 1)));
@@ -81,7 +82,8 @@ export class LlmClient {
           ],
         });
         const errBody = (resp as unknown as ProxyErrorBody).error;
-        if (errBody) throw new Error(`LLM 返回错误: ${errBody.message ?? errBody.type ?? 'unknown'}`);
+        if (errBody)
+          throw new Error(`LLM 返回错误: ${errBody.message ?? errBody.type ?? 'unknown'}`);
         const content = resp.choices?.[0]?.message?.content;
         if (!content || !content.trim()) throw new Error('LLM 返回内容为空');
         return params.schema.parse(extractJson(content));
