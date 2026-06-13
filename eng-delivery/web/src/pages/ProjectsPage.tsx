@@ -58,8 +58,8 @@ export function ProjectsPage() {
       <div className="lg:col-span-2">
         <div className="mb-4 flex items-end justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">项目</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <h1 className="font-serif text-3xl font-medium tracking-tight">项目</h1>
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
               每个项目是一座事实底座：录入合同/招标/变更，沉淀可追溯、带原文出处的事实图谱。
             </p>
           </div>
@@ -80,7 +80,7 @@ export function ProjectsPage() {
           <div className="space-y-3">
             {projects.map((p) => (
               <Link key={p.id} to={`/projects/${p.id}`}>
-                <Card className="transition-colors hover:bg-muted/50">
+                <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/40 hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
                   <CardContent className="flex items-center justify-between py-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">

@@ -68,7 +68,7 @@ export function ProjectWorkspace() {
 
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
+          <h1 className="font-serif text-2xl font-medium tracking-tight">{project.name}</h1>
           {projectStatusBadge(project.status)}
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

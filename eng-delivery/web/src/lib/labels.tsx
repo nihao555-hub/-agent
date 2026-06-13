@@ -58,10 +58,11 @@ export const FLOW_STEP_LABELS: Record<string, string> = {
 };
 
 export function engineBadge(engine: string): ReactNode {
-  const isLlm = engine === 'llm' || engine === 'openai';
-  return (
-    <Badge variant={isLlm ? 'blue' : 'outline'}>
-      {isLlm ? `大模型 · ${engine}` : `离线兜底 · ${engine}`}
-    </Badge>
-  );
+  if (engine === 'ragflow') {
+    return <Badge variant="green">RAGFlow · 多模态检索</Badge>;
+  }
+  if (engine === 'llm' || engine === 'openai') {
+    return <Badge variant="blue">{`大模型 · ${engine}`}</Badge>;
+  }
+  return <Badge variant="outline">{`离线兜底 · ${engine}`}</Badge>;
 }

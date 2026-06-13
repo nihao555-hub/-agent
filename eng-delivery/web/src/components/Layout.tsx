@@ -20,7 +20,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground">
               工
             </span>
-            <span className="text-sm font-semibold tracking-tight">工程交付大脑 · 事实底座</span>
+            <span className="font-serif text-base font-medium tracking-tight">
+              工程交付大脑 <span className="text-muted-foreground">· 事实底座</span>
+            </span>
           </Link>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             {health ? (
@@ -35,7 +37,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8" key={location.pathname}>
+      <main className="mx-auto max-w-6xl animate-fade-in-up px-6 py-8" key={location.pathname}>
         {children}
       </main>
 

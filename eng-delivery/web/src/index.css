@@ -35,15 +35,49 @@ body {
   margin: 0;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: 'Geist', 'Inter', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
+  font-family: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   line-height: 1.6;
 }
 
-/* 让 Ant Design 的表格/步骤条与本主题对齐：去掉重阴影、统一细边框。 */
+/* 编辑体衬线，用于品牌名 / 页面大标题 / 卡片标题，营造"文档式"高级感。 */
+.font-serif {
+  font-feature-settings: 'liga' 1, 'calt' 1;
+  letter-spacing: -0.02em;
+}
+
+/* 尊重系统「减少动效」偏好。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 让 Ant Design 的表格/步骤条与本主题对齐：去掉重阴影、统一细边框、继承字体。 */
 .ant-table-wrapper .ant-table {
   background: transparent;
 }
 .ant-card {
   box-shadow: none !important;
+}
+:where(.ant-table-wrapper, .ant-steps, .ant-timeline, .ant-drawer, .ant-empty, .ant-tag) {
+  font-family: inherit;
+}
+
+/* 极细暖色滚动条，弱化系统默认。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d8d8d4 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d8d8d4;
+  border-radius: 9999px;
 }

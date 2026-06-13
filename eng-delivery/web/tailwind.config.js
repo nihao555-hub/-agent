@@ -32,8 +32,18 @@ export default {
         sm: 'calc(var(--radius) - 4px)',
       },
       fontFamily: {
-        sans: ['Geist', 'Inter', 'SF Pro Display', 'Helvetica Neue', 'system-ui', 'sans-serif'],
+        sans: ['Geist', 'SF Pro Display', 'Helvetica Neue', 'system-ui', 'sans-serif'],
+        serif: ['Newsreader', 'Lyon Text', 'Playfair Display', 'Georgia', 'serif'],
         mono: ['Geist Mono', 'SF Mono', 'JetBrains Mono', 'ui-monospace', 'monospace'],
+      },
+      keyframes: {
+        'fade-in-up': {
+          '0%': { opacity: '0', transform: 'translateY(12px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'fade-in-up': 'fade-in-up 600ms cubic-bezier(0.16, 1, 0.3, 1) both',
       },
     },
   },

@@ -18,8 +18,7 @@ const theme = {
     colorBgContainer: '#FFFFFF',
     colorBgLayout: '#FBFBFA',
     borderRadius: 8,
-    fontFamily:
-      "'Geist', 'Inter', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif",
+    fontFamily: "'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif",
     boxShadow: 'none',
     boxShadowSecondary: 'none',
   },
