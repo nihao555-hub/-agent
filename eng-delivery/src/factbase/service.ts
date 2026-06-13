@@ -26,6 +26,7 @@ import type { ClaimAssembler } from './claim/assembler';
 import { buildClaimFlow, CLAIM_FLOW_KIND } from './claim/flow';
 import type { EmbeddingClient } from './embeddings';
 import type { FactExtractor } from './extractor';
+import type { RagRetriever } from './ragflow';
 import type {
   Change,
   Chunk,
@@ -154,6 +155,7 @@ export class FactBaseService {
     private readonly bim: BimAnalyzer,
     private readonly assembler: ClaimAssembler,
     private readonly logger?: Logger,
+    private readonly retriever?: RagRetriever,
   ) {
     this.orchestrator = new FlowOrchestrator(repos.flowRuns, repos.flowSteps, logger);
   }
@@ -197,6 +199,7 @@ export class FactBaseService {
     });
     const chunks = this.persistChunks(document.id, projectId, analyzed.chunks);
     await this.embedChunks(chunks);
+    await this.indexInRetriever(projectId, document.id, input.title, chunks);
     this.repos.documents.markParsed(document.id, pageCountOf(analyzed.chunks));
     const saved = this.repos.documents.get(document.id) ?? document;
     this.repos.events.create(projectId, 'document_ingested', {
@@ -222,6 +225,7 @@ export class FactBaseService {
     const raw = chunkBlocks(blocks);
     const chunks = this.persistChunks(document.id, projectId, raw);
     await this.embedChunks(chunks);
+    await this.indexInRetriever(projectId, document.id, input.title, chunks);
     this.repos.documents.markParsed(document.id, chunks.length);
     const saved = this.repos.documents.get(document.id) ?? document;
     this.repos.events.create(projectId, 'bim_ingested', {
@@ -287,7 +291,10 @@ export class FactBaseService {
   }
 
   /** 从（指定文档或全项目的）片段中抽取「我方承诺」，每条挂上原文出处。 */
-  async extractCommitments(projectId: string, documentId?: string): Promise<CommitmentExtractResult> {
+  async extractCommitments(
+    projectId: string,
+    documentId?: string,
+  ): Promise<CommitmentExtractResult> {
     this.getProject(projectId);
     const chunks = this.chunksFor(projectId, documentId);
     const extracted = await this.extractor.extractCommitments(chunks);
@@ -330,8 +337,7 @@ export class FactBaseService {
     );
     const deviations = extracted.map((e) => {
       const requirement = requirements[e.requirementIndex];
-      const commitment =
-        e.commitmentIndex != null ? commitments[e.commitmentIndex] : undefined;
+      const commitment = e.commitmentIndex != null ? commitments[e.commitmentIndex] : undefined;
       const dev = this.repos.deviations.create({
         projectId,
         requirementId: requirement?.id,
@@ -395,7 +401,10 @@ export class FactBaseService {
         relation: 'basis',
       });
     }
-    this.repos.events.create(projectId, 'change_recorded', { changeId: change.id, title: input.title });
+    this.repos.events.create(projectId, 'change_recorded', {
+      changeId: change.id,
+      title: input.title,
+    });
     return change;
   }
 
@@ -504,6 +513,28 @@ export class FactBaseService {
     documentId?: string,
   ): Promise<SearchResult> {
     this.getProject(projectId);
+    // 优先用 RAGFlow（多模态/更强排序），命中回链到本地 chunk 以保证证据链；失败回退内置向量检索。
+    if (this.retriever) {
+      try {
+        const ragHits = await this.searchWithRetriever(projectId, query, topK, documentId);
+        if (ragHits.length > 0) {
+          return { engine: this.retriever.name, query, hits: ragHits };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger?.warn({ err: msg }, 'RAGFlow 检索失败，回退内置向量检索');
+      }
+    }
+    return this.searchInProcess(projectId, query, topK, documentId);
+  }
+
+  /** 内置向量检索：把 query 向量化，在项目片段上做余弦检索。 */
+  private async searchInProcess(
+    projectId: string,
+    query: string,
+    topK: number,
+    documentId?: string,
+  ): Promise<SearchResult> {
     const chunks = this.chunksFor(projectId, documentId).filter((c) => c.embedding?.length);
     if (chunks.length === 0) {
       return { engine: this.embedder.name, query, hits: [] };
@@ -522,6 +553,56 @@ export class FactBaseService {
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(1, topK));
     return { engine: this.embedder.name, query, hits };
+  }
+
+  /**
+   * 用外部 RAG 检索器（RAGFlow）检索，并把命中回链到本地 chunk：
+   * 优先用命中里编码的本地 chunk id，缺失时按原文文本回退匹配，保证 ChunkHit.id 始终是本地 id。
+   */
+  private async searchWithRetriever(
+    projectId: string,
+    query: string,
+    topK: number,
+    documentId?: string,
+  ): Promise<ChunkHit[]> {
+    const retriever = this.retriever;
+    if (!retriever) return [];
+    const hits = await retriever.retrieve({ projectId, documentId, query, topK });
+    if (hits.length === 0) return [];
+    const localChunks = this.chunksFor(projectId, documentId);
+    const byId = new Map(localChunks.map((c) => [c.id, c]));
+    const byText = new Map(localChunks.map((c) => [c.text.trim(), c]));
+    const mapped: ChunkHit[] = [];
+    for (const h of hits) {
+      const local =
+        (h.localChunkId ? byId.get(h.localChunkId) : undefined) ?? byText.get(h.text.trim());
+      if (!local) continue;
+      mapped.push({
+        id: local.id,
+        documentId: local.documentId,
+        page: local.page,
+        clause: local.clause,
+        text: local.text,
+        score: h.score,
+      });
+    }
+    return mapped.slice(0, Math.max(1, topK));
+  }
+
+  /** 把本地 chunk 推入外部 RAG 索引（尽力而为；失败只记日志，不阻断录入）。 */
+  private async indexInRetriever(
+    projectId: string,
+    documentId: string,
+    documentTitle: string | undefined,
+    chunks: Chunk[],
+  ): Promise<void> {
+    if (!this.retriever || chunks.length === 0) return;
+    try {
+      await this.retriever.index({ projectId, documentId, documentTitle, chunks });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger?.warn({ err: msg }, 'RAGFlow 入库失败，检索将回退内置向量检索');
+    }
   }
 
   /** 为片段计算并持久化向量；失败只记日志，不阻断录入（检索时自然跳过无向量片段）。 */

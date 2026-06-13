@@ -35,6 +35,24 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.replace(/\/$/, '') : undefined)),
   BIM_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  // RAGFlow 检索引擎（多模态 RAG）。三者齐备才启用：用它做语义检索/入库，命中可回链本地 chunk；
+  // 未配置则用内置向量检索（OpenAI 兼容 embeddings 或哈希兜底），功能不受影响。
+  RAGFLOW_BASE_URL: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/$/, '') : undefined)),
+  RAGFLOW_API_KEY: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  RAGFLOW_DATASET_ID: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  RAGFLOW_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   // 持久化（SQLite）。文件库路径目录会自动创建；测试用 :memory: 内存库。
   DB_PATH: z.string().trim().min(1).default('./data/eng-delivery.db'),
 });
@@ -60,6 +78,15 @@ export interface BimServiceConfig {
   timeoutMs: number;
 }
 
+export interface RagflowConfig {
+  /** 三者齐备才启用 RAGFlow 检索；否则走内置向量检索。 */
+  enabled: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  datasetId?: string;
+  timeoutMs: number;
+}
+
 export interface DbConfig {
   path: string;
 }
@@ -70,6 +97,7 @@ export interface AppConfig {
   llm: LlmConfig;
   docService: DocServiceConfig;
   bimService: BimServiceConfig;
+  ragflow: RagflowConfig;
   db: DbConfig;
 }
 
@@ -95,6 +123,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     bimService: {
       url: parsed.BIM_SERVICE_URL,
       timeoutMs: parsed.BIM_SERVICE_TIMEOUT_MS,
+    },
+    ragflow: {
+      enabled: Boolean(
+        parsed.RAGFLOW_BASE_URL && parsed.RAGFLOW_API_KEY && parsed.RAGFLOW_DATASET_ID,
+      ),
+      baseUrl: parsed.RAGFLOW_BASE_URL,
+      apiKey: parsed.RAGFLOW_API_KEY,
+      datasetId: parsed.RAGFLOW_DATASET_ID,
+      timeoutMs: parsed.RAGFLOW_TIMEOUT_MS,
     },
     db: { path: parsed.DB_PATH },
   };

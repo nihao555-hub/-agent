@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 暖色单色（warm monochrome）主题，参考 minimalist-ui 设计规范：
+   纯白卡片 + 暖白底 + 极细灰边框 + 炭黑主色，颜色作为稀缺资源仅用于语义。 */
+:root {
+  --background: 48 33% 99%;
+  --foreground: 200 7% 20%;
+  --card: 0 0% 100%;
+  --card-foreground: 200 7% 20%;
+  --muted: 45 18% 96%;
+  --muted-foreground: 40 3% 46%;
+  --primary: 0 0% 7%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 45 18% 96%;
+  --accent-foreground: 200 7% 20%;
+  --border: 0 0% 91%;
+  --input: 0 0% 91%;
+  --ring: 200 7% 20%;
+  --radius: 0.5rem;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+}
+
+/* 编辑体衬线，用于品牌名 / 页面大标题 / 卡片标题，营造"文档式"高级感。 */
+.font-serif {
+  font-feature-settings: 'liga' 1, 'calt' 1;
+  letter-spacing: -0.02em;
+}
+
+/* 尊重系统「减少动效」偏好。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 让 Ant Design 的表格/步骤条与本主题对齐：去掉重阴影、统一细边框、继承字体。 */
+.ant-table-wrapper .ant-table {
+  background: transparent;
+}
+.ant-card {
+  box-shadow: none !important;
+}
+:where(.ant-table-wrapper, .ant-steps, .ant-timeline, .ant-drawer, .ant-empty, .ant-tag) {
+  font-family: inherit;
+}
+
+/* 极细暖色滚动条，弱化系统默认。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d8d8d4 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d8d8d4;
+  border-radius: 9999px;
+}
