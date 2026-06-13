@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { OSINT_TOOLS } from './osint/collector';
+import { APPLICATION_SOURCES } from './pipeline/types';
+import { APPLICATION_STATUSES } from './pipeline/status';
 import { BG_CATEGORIES, EDUCATION_LEVELS, OUTREACH_CHANNELS } from './types';
 
 const consentTrue = z.literal(true, {
@@ -149,4 +151,47 @@ export const createChatSessionRequestSchema = z.object({
 
 export const chatMessageRequestSchema = z.object({
   message: z.string().min(1, '消息内容不能为空').max(4000),
+});
+
+// ---- 候选人流水线（状态机 + 反馈通知） ----
+
+export const createApplicationRequestSchema = z.object({
+  jobId: z.string().min(1, 'jobId 不能为空'),
+  resume: resumeProfileSchema,
+  source: z.enum(APPLICATION_SOURCES).optional(),
+});
+
+export const transitionRequestSchema = z.object({
+  toStatus: z.enum(APPLICATION_STATUSES),
+  reason: z.string().max(500).optional(),
+  /** 是否同时向候选人发送反馈通知（默认按状态决定可在业务层处理；此处显式控制） */
+  notify: z.boolean().default(false),
+});
+
+export const feedbackRequestSchema = z.object({
+  reason: z.string().max(500).optional(),
+  /** 仅预览文案（不发送、不落库） */
+  preview: z.boolean().default(false),
+});
+
+// ---- 简历自动归集层 ----
+
+const intakeItemSchema = z
+  .object({
+    text: z.string().min(1).max(50000).optional(),
+    fileBase64: z.string().min(1).optional(),
+    fileName: z.string().max(255).optional(),
+    meta: z.string().max(500).optional(),
+  })
+  .refine((v) => Boolean(v.text) || Boolean(v.fileBase64), {
+    message: '每份简历请提供 text 或 fileBase64 之一',
+  });
+
+export const batchIntakeRequestSchema = z.object({
+  jobId: z.string().min(1, 'jobId 不能为空'),
+  resumes: z.array(intakeItemSchema).min(1, '至少需要一份简历').max(100),
+});
+
+export const sourceIntakeRequestSchema = z.object({
+  jobId: z.string().min(1, 'jobId 不能为空'),
 });

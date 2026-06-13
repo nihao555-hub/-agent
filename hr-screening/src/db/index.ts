@@ -39,8 +39,46 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS applications (
+  id           TEXT PRIMARY KEY,
+  job_id       TEXT NOT NULL REFERENCES jobs(id),
+  candidate_id TEXT NOT NULL REFERENCES candidates(id),
+  status       TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  screening    TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS application_events (
+  id             TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES applications(id),
+  type           TEXT NOT NULL,
+  from_status    TEXT,
+  to_status      TEXT,
+  detail         TEXT NOT NULL,
+  created_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id             TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES applications(id),
+  channel        TEXT NOT NULL,
+  recipient      TEXT NOT NULL,
+  subject        TEXT,
+  body           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  engine         TEXT,
+  error          TEXT,
+  created_at     TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON chat_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_applications_job ON applications(job_id);
+CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
+CREATE INDEX IF NOT EXISTS idx_application_events_app ON application_events(application_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_app ON notifications(application_id, created_at);
 `;
 
 /**
