@@ -4,7 +4,8 @@ import { createApp } from '../src/app';
 import { loadConfig } from '../src/config';
 
 // 不传 LLM_API_KEY / 解析服务 / OSINT 服务 → 全程走规则引擎，离线、确定性，便于断言。
-const app = createApp(loadConfig({}));
+// 内存库避免在测试时写出 SQLite 文件。
+const app = createApp(loadConfig({ DB_PATH: ':memory:' }));
 
 const job = {
   title: '后端工程师',

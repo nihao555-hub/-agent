@@ -18,6 +18,18 @@ export interface ChatJsonParams<S extends ZodType> {
   temperature?: number;
 }
 
+export type ChatRole = 'system' | 'user' | 'assistant';
+
+export interface ChatTextMessage {
+  role: ChatRole;
+  content: string;
+}
+
+export interface ChatTextParams {
+  messages: ChatTextMessage[];
+  temperature?: number;
+}
+
 /** 可重试的瞬时错误特征（grsai 代理在高频/限流时会返回 apikey error 等） */
 const TRANSIENT =
   /apikey error|rate|limit|timeout|timed out|temporar|overload|busy|too many|empty|503|429|500|502|504/i;
@@ -91,6 +103,36 @@ export class LlmClient {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
         this.logger?.warn({ attempt, model: this.model, err: msg }, 'LLM 调用失败');
+        if (!TRANSIENT.test(msg) && attempt >= 1) break;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  /**
+   * 多轮对话补全：传入完整消息历史（system + 交替的 user/assistant），返回模型的纯文本回复。
+   * 与 chatJson 共用同一套瞬时错误重试策略。
+   */
+  async chatText(params: ChatTextParams): Promise<string> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) await sleep(Math.min(4000, 400 * 2 ** (attempt - 1)));
+      try {
+        const resp = await this.client.chat.completions.create({
+          model: this.model,
+          temperature: params.temperature ?? 0.6,
+          messages: params.messages,
+        });
+        const errBody = (resp as unknown as ProxyErrorBody).error;
+        if (errBody)
+          throw new Error(`LLM 返回错误: ${errBody.message ?? errBody.type ?? 'unknown'}`);
+        const content = resp.choices?.[0]?.message?.content;
+        if (!content || !content.trim()) throw new Error('LLM 返回内容为空');
+        return content.trim();
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger?.warn({ attempt, model: this.model, err: msg }, 'LLM 对话调用失败');
         if (!TRANSIENT.test(msg) && attempt >= 1) break;
       }
     }

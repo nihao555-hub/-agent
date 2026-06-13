@@ -2,7 +2,12 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
+import { createChatAgent } from './chat/agent';
+import { createChatRouter } from './chat/routes';
+import { ChatService } from './chat/service';
 import type { AppConfig } from './config';
+import { openDatabase } from './db';
+import { CandidateRepository, ChatRepository, JobRepository } from './db/repositories';
 import { createEngine } from './engine';
 import { LlmClient } from './llm/client';
 import { logger as defaultLogger, type Logger } from './logger';
@@ -33,6 +38,14 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
   const osint = new OsintCollector(config.osintService, logger);
   const service = new HrService(engine, parser, osint);
 
+  const db = openDatabase(config.db.path, logger);
+  const chatService = new ChatService(
+    new JobRepository(db),
+    new CandidateRepository(db),
+    new ChatRepository(db),
+    createChatAgent(config, logger),
+  );
+
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -49,10 +62,12 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
       model: config.llm.enabled ? config.llm.model : null,
       resumeService: config.resumeService.url ? 'configured' : 'text-only',
       osintService: config.osintService.url ? 'configured' : 'disabled',
+      storage: config.db.path === ':memory:' ? 'memory' : 'sqlite',
     });
   });
 
   app.use('/api', createRouter(service));
+  app.use('/api/chat', createChatRouter(chatService));
 
   app.use(notFoundHandler);
   app.use(errorHandler(logger));
