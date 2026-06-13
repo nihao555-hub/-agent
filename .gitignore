@@ -6,6 +6,14 @@ coverage/
 .env.local
 .DS_Store
 
+# SQLite 运行时数据（持久化对话式初筛会话）
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
 # Python (microservices)
 __pycache__/
 *.pyc

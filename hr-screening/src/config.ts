@@ -28,6 +28,7 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.replace(/\/$/, '') : undefined)),
   OSINT_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  DB_PATH: z.string().trim().min(1).default('./data/hr.db'),
 });
 
 export interface LlmConfig {
@@ -52,12 +53,18 @@ export interface OsintServiceConfig {
   timeoutMs: number;
 }
 
+export interface DbConfig {
+  /** SQLite 文件路径；`:memory:` 表示内存库（测试用）。用于持久化对话式初筛的会话与消息。 */
+  path: string;
+}
+
 export interface AppConfig {
   port: number;
   logLevel: LogLevel;
   llm: LlmConfig;
   resumeService: ResumeServiceConfig;
   osintService: OsintServiceConfig;
+  db: DbConfig;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -80,6 +87,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     osintService: {
       url: parsed.OSINT_SERVICE_URL,
       timeoutMs: parsed.OSINT_SERVICE_TIMEOUT_MS,
+    },
+    db: {
+      path: parsed.DB_PATH,
     },
   };
 }

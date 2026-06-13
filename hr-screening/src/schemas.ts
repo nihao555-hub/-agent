@@ -141,3 +141,12 @@ export const analyzeRequestSchema = z.object({
   consentObtained: z.boolean().default(false),
   findings: z.array(authorizedFindingSchema).max(50).optional(),
 });
+
+export const createChatSessionRequestSchema = z.object({
+  job: jobPostingSchema,
+  resume: resumeProfileSchema,
+});
+
+export const chatMessageRequestSchema = z.object({
+  message: z.string().min(1, '消息内容不能为空').max(4000),
+});
