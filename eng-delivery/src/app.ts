@@ -24,6 +24,8 @@ import {
   TenderRepository,
 } from './db/repositories';
 import { TenderDocParser } from './doc/parser';
+import { DocAnalyzer } from './doc/structured';
+import { BimAnalyzer } from './bim/client';
 import { createEngine } from './engine';
 import { createEmbeddingClient } from './factbase/embeddings';
 import { createFactExtractor } from './factbase/extractor';
@@ -57,6 +59,8 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
 
   const factExtractor = createFactExtractor(config, logger);
   const embedder = createEmbeddingClient(config, logger);
+  const docAnalyzer = new DocAnalyzer(config.docService, logger);
+  const bim = new BimAnalyzer(config.bimService, logger);
   const factBase = new FactBaseService(
     {
       projects: new ProjectRepository(db),
@@ -72,8 +76,9 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
       events: new ProjectEventRepository(db),
     },
     factExtractor,
-    parser,
+    docAnalyzer,
     embedder,
+    bim,
     logger,
   );
 
@@ -92,6 +97,7 @@ export function createApp(config: AppConfig, logger: Logger = defaultLogger): Ex
       engine: engine.name,
       model: config.llm.enabled ? config.llm.model : null,
       docService: config.docService.url ? 'configured' : 'text-only',
+      bimService: config.bimService.url ? 'configured' : 'disabled',
       storage: config.db.path === ':memory:' ? 'memory' : 'sqlite',
     });
   });

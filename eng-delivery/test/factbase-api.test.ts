@@ -67,6 +67,22 @@ describe('事实底座 API（规则兜底离线模式）', () => {
     expect(res.status).toBe(400);
   });
 
+  it('未配 BIM 服务时 /bim 录入返回 503', async () => {
+    const create = await request(app).post('/api/projects').send({ name: 'P' });
+    const projectId = create.body.project.id as string;
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/bim`)
+      .send({ fileBase64: 'AAAA', fileName: 'm.ifc' });
+    expect(res.status).toBe(503);
+  });
+
+  it('/bim 缺少 fileBase64 返回 400', async () => {
+    const create = await request(app).post('/api/projects').send({ name: 'P' });
+    const projectId = create.body.project.id as string;
+    const res = await request(app).post(`/api/projects/${projectId}/bim`).send({});
+    expect(res.status).toBe(400);
+  });
+
   it('录入文档缺少 text 与 fileBase64 返回 400', async () => {
     const create = await request(app).post('/api/projects').send({ name: 'P' });
     const projectId = create.body.project.id as string;

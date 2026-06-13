@@ -13,12 +13,23 @@ import {
   ProjectRepository,
   RequirementRepository,
 } from '../src/db/factbase';
-import { TenderDocParser } from '../src/doc/parser';
+import { BimAnalyzer, type BimModel } from '../src/bim/client';
+import { DocAnalyzer } from '../src/doc/structured';
 import { HashEmbeddingClient } from '../src/factbase/embeddings';
 import { RuleFactExtractor } from '../src/factbase/extractor';
 import { FactBaseService } from '../src/factbase/service';
 
-function buildService(db: Db): FactBaseService {
+/** 离线 BIM 桩：跳过 HTTP，直接返回给定模型，便于测试 BIM 事实落库/检索。 */
+class StubBimAnalyzer extends BimAnalyzer {
+  constructor(private readonly model: BimModel) {
+    super({ timeoutMs: 1 });
+  }
+  override async analyze(): Promise<BimModel> {
+    return this.model;
+  }
+}
+
+function buildService(db: Db, bim: BimAnalyzer = new BimAnalyzer({ timeoutMs: 1000 })): FactBaseService {
   return new FactBaseService(
     {
       projects: new ProjectRepository(db),
@@ -34,8 +45,9 @@ function buildService(db: Db): FactBaseService {
       events: new ProjectEventRepository(db),
     },
     new RuleFactExtractor(),
-    new TenderDocParser({ timeoutMs: 1000 }),
+    new DocAnalyzer({ timeoutMs: 1000 }),
     new HashEmbeddingClient(),
+    bim,
   );
 }
 
@@ -140,5 +152,33 @@ describe('FactBaseService 事实图谱编排（规则兜底离线）', () => {
     const project = service.createProject({ name: 'P' });
     const res = await service.search(project.id, '任意查询', 5);
     expect(res.hits).toHaveLength(0);
+  });
+
+  it('录入 BIM 模型 → 空间/构件/工程量沉淀为可检索引用的事实', async () => {
+    const bimSvc = buildService(
+      db,
+      new StubBimAnalyzer({
+        spaces: [{ name: '泵房', area: 120 }],
+        elements: [{ type: 'IfcWall', material: 'C30混凝土', quantities: { volume: 35 } }],
+        quantities: [{ name: '混凝土总量', value: 1200, unit: 'm³' }],
+      }),
+    );
+    const project = bimSvc.createProject({ name: '某污水处理厂工程' });
+    const ingest = await bimSvc.ingestBim(project.id, { fileBase64: 'AAAA', fileName: 'm.ifc' });
+    expect(ingest.document.type).toBe('bim');
+    expect(ingest.chunkCount).toBe(3);
+
+    const graph = bimSvc.getGraph(project.id);
+    expect(graph.events.some((e) => e.type === 'bim_ingested')).toBe(true);
+
+    const { hits } = await bimSvc.search(project.id, '混凝土工程量');
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('未配 BIM 服务时录入 IFC 返回 503', async () => {
+    const project = service.createProject({ name: 'P' });
+    await expect(service.ingestBim(project.id, { fileBase64: 'AAAA' })).rejects.toMatchObject({
+      status: 503,
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkText } from '../src/doc/chunker';
+import { chunkBlocks, chunkText } from '../src/doc/chunker';
 
 describe('chunkText 纯文本机械切片', () => {
   it('按空行分段并连续编号', () => {
@@ -30,5 +30,27 @@ describe('chunkText 纯文本机械切片', () => {
 
   it('空白文本返回空数组', () => {
     expect(chunkText('   \n\n  ')).toHaveLength(0);
+  });
+});
+
+describe('chunkBlocks 结构化块切片（保留页码/条款）', () => {
+  it('保留页码，连续编号，跳过空块', () => {
+    const chunks = chunkBlocks([
+      { text: '第一页内容', page: 1 },
+      { text: '   ', page: 2 },
+      { text: '第三页内容', page: 3, clause: '5.1' },
+    ]);
+    expect(chunks).toHaveLength(2);
+    expect(chunks.map((c) => c.ordinal)).toEqual([0, 1]);
+    expect(chunks[0].page).toBe(1);
+    expect(chunks[1]).toMatchObject({ page: 3, clause: '5.1' });
+  });
+
+  it('块未给条款时从文本识别，过长块按句切分仍保留页码', () => {
+    const long = Array.from({ length: 40 }, (_, i) => `这是第${i}句较长的说明文字。`).join('');
+    const chunks = chunkBlocks([{ text: `3.2 ${long}`, page: 7 }], { maxChars: 100 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.page === 7)).toBe(true);
+    expect(chunks[0].clause).toBe('3.2');
   });
 });

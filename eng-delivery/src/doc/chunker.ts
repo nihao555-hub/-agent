@@ -44,6 +44,33 @@ function splitLongParagraph(text: string, maxChars: number): string[] {
   return out.length > 0 ? out : [text];
 }
 
+/** 结构化输入块（来自 MinerU/BIM 等解析服务），可带页码/条款定位。 */
+export interface StructuredBlock {
+  text: string;
+  page?: number;
+  clause?: string;
+}
+
+/**
+ * 把已结构化的块（如 MinerU 按页/版面给出的块）切成片段，保留页码/条款定位。
+ * 过长的块仍按句切分；块未给条款时尝试从文本识别。这是 layer C「真实文档理解」接入点。
+ */
+export function chunkBlocks(blocks: StructuredBlock[], options: ChunkOptions = {}): RawChunk[] {
+  const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
+  const chunks: RawChunk[] = [];
+  let ordinal = 0;
+  for (const block of blocks) {
+    const text = block.text.trim();
+    if (!text) continue;
+    const clause = block.clause ?? detectClause(text);
+    for (const piece of splitLongParagraph(text, maxChars)) {
+      chunks.push({ ordinal, text: piece, page: block.page, clause });
+      ordinal += 1;
+    }
+  }
+  return chunks;
+}
+
 /** 把纯文本切成片段。按空行分段；过长段落再按句切分。 */
 export function chunkText(text: string, options: ChunkOptions = {}): RawChunk[] {
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;

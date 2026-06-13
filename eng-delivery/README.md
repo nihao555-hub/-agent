@@ -74,11 +74,40 @@ curl -X POST localhost:3002/api/analyze \
   }'
 ```
 
+## 事实底座（项目维度）API
+
+把招标文件 / 合同 / 规范 / 工程量清单 / 我方投标 / 变更 / 函件 / BIM 沉淀成**可追溯、带原文出处、
+可被 AI 推理**的统一事实库（要求基线 ↔ 承诺 ↔ 偏离 ↔ 证据 ↔ 变更 ↔ 索赔 关联图谱）。详见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+| 方法 & 路径 | 作用 |
+| --- | --- |
+| `POST /api/projects` | 新建项目 |
+| `GET /api/projects` / `GET /api/projects/:id` | 项目列表 / 单个项目 |
+| `POST /api/projects/:id/status` | 项目状态流转（bidding→awarded→delivering→settled） |
+| `POST /api/projects/:id/documents` | 录入并解析一份文档（`text` 或 `fileBase64`）→ 带页码/条款的可引用片段 |
+| `POST /api/projects/:id/bim` | 录入一份 BIM(IFC) 模型 → 空间/构件/工程量事实（需 `BIM_SERVICE_URL`） |
+| `POST /api/projects/:id/extract-requirements` | 抽取「要求基线」，每条带原文出处 |
+| `POST /api/projects/:id/extract-commitments` | 抽取我方承诺（传 `documentId` 指向我方投标文件） |
+| `POST /api/projects/:id/detect-deviations` | 偏离检测（要求 ↔ 承诺），未响应的强制要求标 `at_risk` |
+| `POST /api/projects/:id/search` | **带引用的语义检索**，命中片段溯源到页码/条款（`engine: openai`/`hash`） |
+| `POST /api/projects/:id/changes` | 记录变更/签证 |
+| `GET /api/projects/:id/graph` | 项目事实图谱 + 统计 + 事件链 |
+
 ## 文件解析（可选 MinerU 等微服务）
 
 `text` 字段可直接提交纯文本（**离线可用**）。若要解析 PDF / Word / 扫描件，部署一个
 MinerU 风格的解析微服务并设置 `DOC_SERVICE_URL`；服务接收 `multipart/form-data` 的 `file`
-字段，返回 `{ "text" | "markdown" | "content": "..." }`。未配置时提交文件会返回明确的 503 提示。
+字段，返回 `{ "text" | "markdown" | "content" }`，或带版面的 `{ "pages": [{ "page": 1,
+"blocks": [{ "text", "clause" }] }] }`——后者会把**页码/条款**下传到每个片段，使检索能溯源到真实页码。
+未配置时提交文件会返回明确的 503 提示。
+
+## BIM 解析（可选 IfcOpenShell 风格微服务）
+
+部署一个 IfcOpenShell 风格的微服务并设置 `BIM_SERVICE_URL`；服务接收 `multipart/form-data`
+的 `file`（IFC 模型），返回 `{ "spaces": [...], "elements": [...], "quantities": [...] }`。
+后端会把空间 / 构件 / 工程量摊平成中文事实块落库，从而**可被同一套带引用检索命中**。未配置时
+`POST /api/projects/:id/bim` 返回 503（不影响其余功能）。
 
 ## 持久化
 

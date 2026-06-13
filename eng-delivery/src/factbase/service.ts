@@ -12,8 +12,10 @@ import type {
   ProjectRepository,
   RequirementRepository,
 } from '../db/factbase';
-import type { TenderDocParser } from '../doc/parser';
-import { chunkText } from '../doc/chunker';
+import { summarizeBimModel } from '../bim/client';
+import type { BimAnalyzer } from '../bim/client';
+import { chunkBlocks } from '../doc/chunker';
+import type { DocAnalyzer } from '../doc/structured';
 import type { Logger } from '../logger';
 import { cosineSimilarity } from '../utils/vector';
 import type { EmbeddingClient } from './embeddings';
@@ -62,6 +64,13 @@ export interface IngestDocumentInput {
   source?: string;
   text?: string;
   fileBase64?: string;
+  fileName?: string;
+}
+
+export interface IngestBimInput {
+  title?: string;
+  source?: string;
+  fileBase64: string;
   fileName?: string;
 }
 
@@ -123,8 +132,9 @@ export class FactBaseService {
   constructor(
     private readonly repos: FactBaseRepos,
     private readonly extractor: FactExtractor,
-    private readonly parser: TenderDocParser,
+    private readonly docAnalyzer: DocAnalyzer,
     private readonly embedder: EmbeddingClient,
+    private readonly bim: BimAnalyzer,
     private readonly logger?: Logger,
   ) {}
 
@@ -151,10 +161,10 @@ export class FactBaseService {
     return this.getProject(id);
   }
 
-  /** 录入并解析一份文档：抽取文本 → 机械切片 → 落库为可引用的 chunk。 */
+  /** 录入并解析一份文档：文档理解（页码/条款定位）→ 切片 → 向量化 → 落库为可引用 chunk。 */
   async ingestDocument(projectId: string, input: IngestDocumentInput): Promise<IngestResult> {
     this.getProject(projectId);
-    const extracted = await this.parser.extract({
+    const analyzed = await this.docAnalyzer.analyze({
       text: input.text,
       fileBase64: input.fileBase64,
       fileName: input.fileName,
@@ -163,12 +173,54 @@ export class FactBaseService {
       projectId,
       type: input.type,
       title: input.title,
-      source: input.source ?? extracted.source,
+      source: input.source ?? analyzed.source,
     });
-    const raw = chunkText(extracted.text);
-    const chunks = this.repos.chunks.createMany(
+    const chunks = this.persistChunks(document.id, projectId, analyzed.chunks);
+    await this.embedChunks(chunks);
+    this.repos.documents.markParsed(document.id, pageCountOf(analyzed.chunks));
+    const saved = this.repos.documents.get(document.id) ?? document;
+    this.repos.events.create(projectId, 'document_ingested', {
+      documentId: document.id,
+      type: input.type,
+      chunks: chunks.length,
+      source: analyzed.source,
+    });
+    return { document: saved, chunkCount: chunks.length, chunks };
+  }
+
+  /** 录入一份 BIM(IFC) 模型：解析成空间/构件/工程量事实 → 切片 → 向量化，纳入可检索事实底座。 */
+  async ingestBim(projectId: string, input: IngestBimInput): Promise<IngestResult> {
+    this.getProject(projectId);
+    const model = await this.bim.analyze(input.fileBase64, input.fileName);
+    const blocks = summarizeBimModel(model);
+    const document = this.repos.documents.create({
+      projectId,
+      type: 'bim',
+      title: input.title,
+      source: input.source ?? input.fileName ?? 'bim',
+    });
+    const raw = chunkBlocks(blocks);
+    const chunks = this.persistChunks(document.id, projectId, raw);
+    await this.embedChunks(chunks);
+    this.repos.documents.markParsed(document.id, chunks.length);
+    const saved = this.repos.documents.get(document.id) ?? document;
+    this.repos.events.create(projectId, 'bim_ingested', {
+      documentId: document.id,
+      spaces: model.spaces?.length ?? 0,
+      elements: model.elements?.length ?? 0,
+      quantities: model.quantities?.length ?? 0,
+    });
+    return { document: saved, chunkCount: chunks.length, chunks };
+  }
+
+  private persistChunks(
+    documentId: string,
+    projectId: string,
+    raw: { ordinal: number; text: string; page?: number; clause?: string }[],
+  ): Chunk[] {
+    return this.repos.chunks.createMany(
       raw.map((c) => ({
-        documentId: document.id,
+        documentId,
         projectId,
         ordinal: c.ordinal,
         text: c.text,
@@ -176,16 +228,6 @@ export class FactBaseService {
         clause: c.clause,
       })),
     );
-    await this.embedChunks(chunks);
-    this.repos.documents.markParsed(document.id, raw.length);
-    const saved = this.repos.documents.get(document.id) ?? document;
-    this.repos.events.create(projectId, 'document_ingested', {
-      documentId: document.id,
-      type: input.type,
-      chunks: chunks.length,
-      source: extracted.source,
-    });
-    return { document: saved, chunkCount: chunks.length, chunks };
   }
 
   /** 从（指定文档或全项目的）片段中抽取「要求基线」，每条挂上原文出处。 */
@@ -429,4 +471,10 @@ export class FactBaseService {
     }
     return this.repos.chunks.listByProject(projectId);
   }
+}
+
+/** 文档页数：取片段里最大的页码；无页码（纯文本）时退化为片段数。 */
+function pageCountOf(chunks: { page?: number }[]): number {
+  const maxPage = chunks.reduce((max, c) => (c.page && c.page > max ? c.page : max), 0);
+  return maxPage > 0 ? maxPage : chunks.length;
 }

@@ -4,6 +4,7 @@ import { parseBody } from '../utils/validate';
 import {
   createProjectSchema,
   extractScopeSchema,
+  ingestBimSchema,
   ingestDocumentSchema,
   recordChangeSchema,
   searchSchema,
@@ -59,6 +60,16 @@ export function createFactBaseRouter(service: FactBaseService): Router {
     asyncHandler(async (req, res) => {
       const data = parseBody(ingestDocumentSchema, req.body);
       const result = await service.ingestDocument(req.params.id, data);
+      res.status(201).json(result);
+    }),
+  );
+
+  // 录入并解析一份 BIM(IFC) 模型 → 空间/构件/工程量事实
+  router.post(
+    '/projects/:id/bim',
+    asyncHandler(async (req, res) => {
+      const data = parseBody(ingestBimSchema, req.body);
+      const result = await service.ingestBim(req.params.id, data);
       res.status(201).json(result);
     }),
   );

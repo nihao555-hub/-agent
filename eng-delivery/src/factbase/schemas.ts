@@ -33,6 +33,13 @@ export const ingestDocumentSchema = z
     path: ['text'],
   });
 
+export const ingestBimSchema = z.object({
+  fileBase64: nonEmpty,
+  fileName: optional,
+  title: optional,
+  source: optional,
+});
+
 export const extractScopeSchema = z.object({
   documentId: optional,
 });
@@ -55,6 +62,7 @@ export const recordChangeSchema = z.object({
 export type CreateProjectBody = z.infer<typeof createProjectSchema>;
 export type SetStatusBody = z.infer<typeof setStatusSchema>;
 export type IngestDocumentBody = z.infer<typeof ingestDocumentSchema>;
+export type IngestBimBody = z.infer<typeof ingestBimSchema>;
 export type ExtractScopeBody = z.infer<typeof extractScopeSchema>;
 export type SearchBody = z.infer<typeof searchSchema>;
 export type RecordChangeBody = z.infer<typeof recordChangeSchema>;

@@ -27,6 +27,14 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.replace(/\/$/, '') : undefined)),
   DOC_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  // BIM 解析微服务（IfcOpenShell 风格）。配了才会把上传的 IFC 模型解析成空间/构件/工程量；
+  // 不配则 BIM 录入返回明确 503（其余功能不受影响）。
+  BIM_SERVICE_URL: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/$/, '') : undefined)),
+  BIM_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   // 持久化（SQLite）。文件库路径目录会自动创建；测试用 :memory: 内存库。
   DB_PATH: z.string().trim().min(1).default('./data/eng-delivery.db'),
 });
@@ -47,6 +55,11 @@ export interface DocServiceConfig {
   timeoutMs: number;
 }
 
+export interface BimServiceConfig {
+  url?: string;
+  timeoutMs: number;
+}
+
 export interface DbConfig {
   path: string;
 }
@@ -56,6 +69,7 @@ export interface AppConfig {
   logLevel: LogLevel;
   llm: LlmConfig;
   docService: DocServiceConfig;
+  bimService: BimServiceConfig;
   db: DbConfig;
 }
 
@@ -77,6 +91,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     docService: {
       url: parsed.DOC_SERVICE_URL,
       timeoutMs: parsed.DOC_SERVICE_TIMEOUT_MS,
+    },
+    bimService: {
+      url: parsed.BIM_SERVICE_URL,
+      timeoutMs: parsed.BIM_SERVICE_TIMEOUT_MS,
     },
     db: { path: parsed.DB_PATH },
   };
