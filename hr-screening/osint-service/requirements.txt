@@ -1,0 +1,10 @@
+# osint-service 自身依赖。
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+
+# OSINT 工具本体（按需安装；缺失时服务会优雅降级并在 notes 中说明）：
+#   maigret：   pip install maigret        （或 cd $MAIGRET_HOME && poetry install）
+#   sherlock：  pip install sherlock-project
+#   spiderfoot：cd $SPIDERFOOT_HOME && pip install -r requirements.txt
+maigret>=0.5.0
+sherlock-project>=0.15.0

@@ -1,0 +1,57 @@
+# SmartResume 配置示例（已接好 grsai OpenAI 兼容代理）。
+# 用法：复制到 SmartResume 工程的 configs/config.yaml，并把 api_key 替换为你的 key；
+#       或设置环境变量 SMARTRESUME_CONFIG 指向本文件的副本。
+#
+# 关键点：
+#   - 所有 extract_channels 指向 "default"，走远程 OpenAI 兼容 API（即 grsai），不在本机跑大模型。
+#   - use_direct_models: false  →  不加载本地 Qwen 权重。
+#   - ocr.use_cuda: false       →  CPU 环境也能跑 OCR。
+
+model:
+  name: "gemini-2.5-flash"
+  api_url: "https://grsaiapi.com/v1"
+  api_key: "在此填入你的 grsai key（与 LLM_API_KEY 相同）"
+  max_tokens: 4096
+  temperature: 0
+  top_p: 1.0
+  seed: 0
+
+channels:
+  default:
+    name: "gemini-2.5-flash"
+    api_url: "https://grsaiapi.com/v1"
+    api_key: "在此填入你的 grsai key（与 LLM_API_KEY 相同）"
+    max_tokens: 4096
+    temperature: 0
+    top_p: 1.0
+    seed: 0
+
+# 三类抽取全部走远程 default 渠道（grsai），不依赖本地模型。
+extract_channels:
+  basic_info: "default"
+  work_experience: "default"
+  education: "default"
+
+processing:
+  use_force_ocr: false
+  use_force_json: false
+  use_pdf_raw_text: false
+  remove_position_and_company_line: false
+
+ocr:
+  ocr_provider: "default"
+  use_cuda: false
+  confidence_threshold: 0.5
+
+layout_detection:
+  enabled: true
+
+# 不使用本地直载模型，统一走远程 API。
+use_direct_models: false
+
+model_download:
+  source: "modelscope"
+  models_dir:
+    llm: "models"
+    layout: "models"
+  auto_download: true
