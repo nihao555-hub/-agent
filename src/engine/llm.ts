@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import type { LlmClient } from '../llm/client';
 import type { Logger } from '../logger';
-import { contentUser, promotionUser, recallUser, reviewReplyUser, SYSTEM_PROMPT } from '../llm/prompts';
+import {
+  contentUser,
+  promotionUser,
+  recallUser,
+  reviewReplyUser,
+  SYSTEM_PROMPT,
+} from '../llm/prompts';
 import type {
   PromotionPackage,
   RecallChannel,

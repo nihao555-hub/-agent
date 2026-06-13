@@ -72,13 +72,7 @@ export interface ReviewReply {
   actions: string[];
 }
 
-export const RECALL_SEGMENTS = [
-  'lapsed',
-  'sleeping',
-  'new_to_repeat',
-  'birthday',
-  'vip',
-] as const;
+export const RECALL_SEGMENTS = ['lapsed', 'sleeping', 'new_to_repeat', 'birthday', 'vip'] as const;
 export type RecallSegmentKey = (typeof RECALL_SEGMENTS)[number];
 
 export type RecallChannel = '短信' | '微信';
