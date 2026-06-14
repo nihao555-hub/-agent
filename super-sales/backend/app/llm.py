@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
+import time
 from typing import Any
 
 from openai import OpenAI
@@ -73,11 +75,7 @@ def chat_json(system: str, user: str, *, temperature: float = 0.4, model: str | 
     ]
     last_err: Exception | None = None
     for attempt in range(2):
-        resp = client.chat.completions.create(
-            model=use_model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=temperature,
-        )
+        resp = _create_with_retry(client, use_model, messages, temperature)
         content = resp.choices[0].message.content or ""
         try:
             return _extract_json(content)
@@ -92,3 +90,27 @@ def chat_json(system: str, user: str, *, temperature: float = 0.4, model: str | 
                 }
             )
     raise RuntimeError(f"LLM 未能返回合法 JSON: {last_err}")
+
+
+def _create_with_retry(client: OpenAI, model: str, messages: list[dict[str, str]],
+                       temperature: float, *, tries: int = 4) -> Any:
+    """Call the chat endpoint, retrying transient failures (timeouts / 429 / 5xx)
+    with exponential backoff + jitter. Without this, a momentary API hiccup makes
+    the closer drop to its canned fallback reply — which speaks the wrong language
+    and reads as an obvious bot. Retrying keeps the real, localized answer."""
+    delay = 0.8
+    last_err: Exception | None = None
+    for attempt in range(tries):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+            )
+        except Exception as err:  # noqa: BLE001 - transport/rate-limit/5xx are transient
+            last_err = err
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay + random.uniform(0, 0.4))
+            delay *= 2
+    raise RuntimeError(f"LLM 调用失败: {last_err}")  # pragma: no cover

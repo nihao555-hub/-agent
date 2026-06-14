@@ -25,6 +25,16 @@ import os
 import time
 from typing import Any, Protocol
 
+# Human-like send pacing: how long to "type" before each message lands. A real
+# person never fires off several messages instantly; they pause to read/think
+# and then type for a beat (longer messages take longer). Channels that support
+# a typing indicator show it during this wait. Capped so we never hang too long.
+_TYPING_CAP_MS = 12000
+
+
+def _sleep_ms(ms: int) -> None:
+    time.sleep(max(0, min(int(ms), _TYPING_CAP_MS)) / 1000.0)
+
 
 class Channel(Protocol):
     name: str
@@ -32,7 +42,8 @@ class Channel(Protocol):
 
     def is_configured(self) -> bool: ...
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]: ...
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]: ...
 
 
 class SandboxChannel:
@@ -45,9 +56,11 @@ class SandboxChannel:
     def is_configured(self) -> bool:
         return True
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         # Persistence is handled by the caller (closer.apply_decision) against the
         # store, so the sandbox channel is a no-op transport that always succeeds.
+        # No real delay here — calibration/tests run on sandbox and must stay fast.
         return {"ok": True, "channel": self.name, "delivered": len(messages)}
 
 
@@ -62,7 +75,8 @@ class _EnvChannel:
     def is_configured(self) -> bool:
         return all(os.getenv(k) for k in self.required_env)
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         if not self.is_configured():
             return {
                 "ok": False,
@@ -87,7 +101,8 @@ class TelegramChannel(_EnvChannel):
     risk = "official"
     required_env = ("TELEGRAM_BOT_TOKEN",)
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         if not self.is_configured():
             return super().send(to, messages, asset_id)
         import requests
@@ -95,7 +110,19 @@ class TelegramChannel(_EnvChannel):
         base = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
         token = os.environ["TELEGRAM_BOT_TOKEN"]
         delivered = 0
-        for msg in messages:
+        for i, msg in enumerate(messages):
+            # human pacing: show "typing…" then wait before the message lands.
+            wait_ms = pacing[i] if pacing and i < len(pacing) else 0
+            remaining = min(int(wait_ms), _TYPING_CAP_MS)
+            while remaining > 0:
+                try:
+                    requests.post(f"{base}/bot{token}/sendChatAction",
+                                  json={"chat_id": to, "action": "typing"}, timeout=10)
+                except Exception:  # noqa: BLE001
+                    break
+                step = min(remaining, 4500)  # Telegram typing lasts ~5s; refresh
+                _sleep_ms(step)
+                remaining -= step
             r = requests.post(
                 f"{base}/bot{token}/sendMessage",
                 json={"chat_id": to, "text": msg},
@@ -120,7 +147,8 @@ class WhatsAppChannel(_EnvChannel):
     risk = "unofficial"
     required_env = ("WA_GATEWAY_BASE", "WA_GATEWAY_API_KEY", "WA_GATEWAY_INSTANCE")
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         if not self.is_configured():
             return super().send(to, messages, asset_id)
         import requests
@@ -130,8 +158,15 @@ class WhatsAppChannel(_EnvChannel):
         url = f"{base}/message/sendText/{instance}"
         headers = {"apikey": os.environ["WA_GATEWAY_API_KEY"]}
         delivered = 0
-        for msg in messages:
-            r = requests.post(url, headers=headers, json={"number": to, "text": msg}, timeout=20)
+        for i, msg in enumerate(messages):
+            # Evolution API shows a real "typing…" presence for ``delay`` ms before
+            # the text lands — exactly the human cadence we want, done gateway-side.
+            wait_ms = min(int(pacing[i]), _TYPING_CAP_MS) if pacing and i < len(pacing) else 0
+            body = {"number": to, "text": msg}
+            if wait_ms > 0:
+                body["delay"] = wait_ms
+                body["options"] = {"delay": wait_ms, "presence": "composing"}
+            r = requests.post(url, headers=headers, json=body, timeout=max(20, wait_ms // 1000 + 20))
             if r.ok:
                 delivered += 1
             else:
@@ -145,7 +180,8 @@ class LineChannel(_EnvChannel):
     risk = "official"
     required_env = ("LINE_CHANNEL_TOKEN",)
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         if not self.is_configured():
             return super().send(to, messages, asset_id)
         import requests
@@ -155,6 +191,8 @@ class LineChannel(_EnvChannel):
         # LINE push accepts up to 5 message objects per call.
         delivered = 0
         for i in range(0, len(messages), 5):
+            if pacing and i < len(pacing):
+                _sleep_ms(pacing[i])  # pace bursts; LINE has no public typing API
             chunk = messages[i : i + 5]
             r = requests.post(
                 f"{base}/v2/bot/message/push",
@@ -193,7 +231,8 @@ class WeComChannel(_EnvChannel):
         self._token = (tok, time.time() + data.get("expires_in", 7200) - 120)
         return tok
 
-    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+    def send(self, to: str, messages: list[str], asset_id: str = "",
+             pacing: list[int] | None = None) -> dict[str, Any]:
         if not self.is_configured():
             return super().send(to, messages, asset_id)
         import requests
@@ -203,7 +242,9 @@ class WeComChannel(_EnvChannel):
         if not token:
             return {"ok": False, "channel": self.name, "error": "获取 WeCom access_token 失败"}
         delivered = 0
-        for msg in messages:
+        for i, msg in enumerate(messages):
+            if pacing and i < len(pacing):
+                _sleep_ms(pacing[i])  # pace bursts; WeCom has no public typing API
             r = requests.post(
                 f"{base}/cgi-bin/message/send",
                 params={"access_token": token},

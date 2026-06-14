@@ -20,6 +20,7 @@ It degrades gracefully to a deterministic reply when no LLM key is configured.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from . import channels, humanize, llm, store
@@ -47,11 +48,30 @@ def _norm_stage(stage: str) -> str:
     return _STAGE_SYNONYMS.get(stage, stage or "认知")
 
 
+def _fallback_lang(inbound: str) -> tuple[str, list[str]]:
+    """A short, neutral holding reply in the customer's own language.
+
+    The fallback only fires when the LLM is unreachable; a canned *Chinese* sales
+    pitch sent to a Japanese/English buyer is itself a dead giveaway, so detect the
+    script of the customer's last message and answer in kind."""
+    s = inbound or ""
+    if any("\u3040" <= c <= "\u30ff" for c in s):  # Japanese kana
+        return "日本語", ["すみません、少し確認してから折り返しご連絡しますね。"]
+    if any("\uac00" <= c <= "\ud7a3" for c in s):  # Korean hangul
+        return "한국어", ["잠시만요, 확인하고 바로 다시 연락드릴게요."]
+    if any("\u0600" <= c <= "\u06ff" for c in s):  # Arabic
+        return "العربية", ["لحظة من فضلك، سأتحقق من ذلك وأعود إليك حالًا."]
+    if any("\u0400" <= c <= "\u04ff" for c in s):  # Cyrillic
+        return "Русский", ["Секунду, уточню и сразу вернусь к вам."]
+    if any("\u4e00" <= c <= "\u9fff" for c in s):  # CJK ideographs → Chinese
+        return "中文", ["收到～我先确认一下再马上回复你。"]
+    if s and all(ord(c) < 0x250 for c in s):  # mostly Latin → English
+        return "English", ["Give me a sec — let me check on that and get right back to you."]
+    return "中文", ["收到～我先确认一下再马上回复你。"]
+
+
 def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]:
-    reply = [
-        "收到～我先确认下你最在意的是价格、还是切换会不会麻烦？",
-        "你方便的话，我可以拿你的真实场景给你算一笔账，看到底值不值，今天下午还是明天上午合适？",
-    ]
+    lang, reply = _fallback_lang(inbound)
     return {
         "cot": [
             {"role": "记忆官", "thought": "读取该客户历史与已知痛点/承诺，确认未重复发问。"},
@@ -59,15 +79,14 @@ def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]
             {"role": "本地化官", "thought": "按客户国家/品类调整称呼、语气与行话，并与客户同语言作答。"},
             {"role": "策略官", "thought": "用 SPIN 影响类提问把痛点量化，避免直接报死价。"},
             {"role": "隐私红线官", "thought": "本条回复不涉及成本价/利润/客户隐私，放行。"},
-            {"role": "拟人化官", "thought": "拆成两条短消息，口语化，结尾给一个二选一下一步。"},
+            {"role": "拟人化官", "thought": "用客户语言发一句简短确认，承诺稍后跟进，保持口语自然。"},
         ],
         "reply": reply,
         "reply_translation": list(reply),
-        "customer_lang": "中文",
+        "customer_lang": lang,
         "inbound_translation": inbound,
         "moves": [
-            {"method": "SPIN", "move": "用影响类提问把痛点量化"},
-            {"method": "二选一收尾", "move": "给出今天/明天的低门槛下一步"},
+            {"method": "稳态兜底", "move": "短确认并承诺马上跟进，保持同语言"},
         ],
         "send_asset": "",
         "stage": customer.get("stage", "认知"),
@@ -182,8 +201,14 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             f"{style_block}"
             "【拟人·别被看出是AI（最高优先级之一）】真人销售≠完美顾问。务必做到：\n"
             "  • 禁 AI 腔/八股（“作为AI”“根据您的需求”“很高兴为您服务”“以下是”“希望以上信息对您有帮助”）。\n"
-            "  • 别每条都『完整结构化』：不要一条消息里同时塞报价+范围+限制+下一步问题+分点列表。多数真人消息"
-            "是一两句短话；想清楚的先抛一句，剩下的等对方接。**绝不要把回复写成像咨询报告/方案稿/内部转发模板**。\n"
+            "  • **最重要：发短消息、别写小作文**。真正的销冠在微信/WhatsApp 里都是一句一句聊：一条消息通常就一两句、"
+            "几十个字以内，说一个点、问一句，把话头递回给客户让他接。**绝不要一条几百字、不要把报价+范围+限制+方案+追问"
+            "塞进一大段，也不要把一条写成好几行的咨询段落**。客户一次问了好几个问题？先拣最要紧的一两个简短回，剩下的等他接话再说。\n"
+            "  • **信息别一次抛完、一轮只推进一步**：把深入的细节/ROI 测算/方案留到客户接话之后再展开，一点点喂。"
+            "这才像真人聊天，也更容易成交——销冠是用一连串短问题把客户带着走，不是丢一大段讲座。\n"
+            "  • **条数看情境、别写死**：日常多半 1 条短句就够；偶尔『先应一句再追一句』可发 2 条短的；客户要资料/报价/"
+            "并列选项时才会多发几条，但每条仍要短。两个绝对禁止：①每轮都恰好 3 条结构化气泡；②把一条写成 100 字以上的大段落。"
+            "是否分条、发几条由你按情境智能判断，唯一硬要求是：每条都短、别写小作文、别机械地每轮同样条数。\n"
             "  • 别每条都以提问收尾、也别每条都先共情再分点再追问——那种固定节奏一眼假。可以偶尔只回应、只确认、"
             "只感叹，不追问。\n"
             "  • 允许真人的不完美：偶尔口语碎句、语气词（嗯/哦/说实话/老实讲/let me be honest/hmm）、轻微停顿、"
@@ -192,11 +217,20 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "数字别一次给得过于精确齐整（真人常说“大概/差不多/我回头确认下”）。\n"
             "  • 不当百科：不必每个问题都滴水不漏地圆回去；不知道的参数就坦白“这个我得回去查/让技术给你准数”，"
             "比假装全知更像真人。\n"
+            "  • 镜像客户：把你的消息**长度、正式度、标点、要不要用 emoji** 调到和客户上一条相近——"
+            "对方一句大白话，你就别甩一大段；对方用 emoji/缩写，你也可以自然地用。别比客户更正式、更啰嗦。\n"
+            "  • 不完美要『少而真、别用力』：偶尔的口语/缩写/漏个标点/把数字说成约数就够了；"
+            "**绝不要堆错别字、绝不要刻意装『打错了*更正』、绝不要卖惨装停顿——那种“使劲装人”比 AI 腔更假、更容易被识破**。\n"
+            "  • 开场别用同一套路：不要每次都『问候+自报家门+价值主张』三连；有时直接接客户上一句的点、"
+            "有时先反问一句、有时只确认——像真人那样看心情和上下文随机应变。\n"
+            "  • 节奏与情绪随对话起伏：聊得顺可以轻松带点玩笑，被怼/被压价可短暂有点真实的无奈或较真，"
+            "之后再回到专业——但点到为止，不表演、不破红线、不掉专业度。\n"
             "【称呼·别露馅】只有当客户在本次对话里自我介绍过名字、或语境自然时才称呼对方名字；"
             "**客户还没报过名时，绝不要在开场就直呼其名**（直接喊一个对方没给过的名字是最容易暴露『系统自动填充』的破绽）。\n"
-            "【消息条数·动态决定】回复条数完全由你按当下情境决定，绝不固定：能一句说清就只发一条；"
-            "需要先回应再追问、或铺垫后给方案时，可拆成多条短消息；不要为凑数硬拆，也不要把该分开的"
-            "硬塞成一大段。该发素材时就把对应素材ID放进 send_asset，而不是干说。\n"
+            "【消息·短而多轮】像真人发 IM 一样：每条都短（一两句、几十字内），说一个点问一句，把话头递回给客户。"
+            "不要写小作文、不要一次抛完所有点，一轮只推进一步，深入的等客户接话再说。条数看情境智能决定、不写死："
+            "日常多半 1 条短句，要资料/报价/并列选项时才多发几条短的。禁止：每轮固定 3 条结构化气泡、或一条写成大段落。"
+            "该发素材时把对应素材ID放进 send_asset，而不是干说。\n"
             "【报价·动态且守住区间】若商品给了报价区间：默认从中位偏上开口，不要一上来就报底价；客户砍价"
             "时要演足为难感（如“这个价我真做不了主，得帮你向上申请”“这已经是给你的最低了”），用赠品/"
             "加量/账期等非降价方式先顶，逼不得已才小步让；**任何情况下都不得报出低于下限或高于上限的价**，"
@@ -331,10 +365,20 @@ def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str,
     customer = store.get_customer(customer_id) or {}
     channel = channels.get_channel(customer.get("platform", "sandbox"))
     if replies and channel.name != "sandbox":
-        result = channel.send(customer.get("external_id", ""), list(replies), asset_id)
+        # Human cadence: type for a beat (with a "typing…" indicator) before each
+        # message lands, instead of firing them off instantly. We deliver in a
+        # background thread so the inbound webhook still returns immediately and
+        # doesn't time out while the closer "types".
+        delays = humanize.send_delays({
+            "read_ms": decision.get("read_ms", 0),
+            "think_ms": decision.get("think_ms", 0),
+            "type_ms": decision.get("type_ms", []),
+        })
+        to = customer.get("external_id", "")
+        msgs = list(replies)
+        threading.Thread(
+            target=channel.send, args=(to, msgs, asset_id, delays), daemon=True,
+        ).start()
         for m in sent:
-            m["delivery"] = {"channel": channel.name, "ok": bool(result.get("ok"))}
-        if not result.get("ok"):
-            for m in sent:
-                m["delivery"]["error"] = result.get("error", "")
+            m["delivery"] = {"channel": channel.name, "queued": True}
     return sent

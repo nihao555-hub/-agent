@@ -46,6 +46,25 @@ def plan(inbound: str, replies: list[str], seed: int | None = None) -> dict[str,
     return {"read_ms": j(read), "think_ms": j(think), "type_ms": type_ms}
 
 
+def send_delays(plan: dict[str, object]) -> list[int]:
+    """Per-message delay (ms) to wait *before* actually sending each message on a
+    real channel, with a "typing…" indicator shown during the wait. The first
+    message also absorbs the read + think beat; later messages get a short gap so
+    bursts don't land all at once."""
+    read = int(plan.get("read_ms", 0) or 0)  # type: ignore[arg-type]
+    think = int(plan.get("think_ms", 0) or 0)  # type: ignore[arg-type]
+    type_ms = list(plan.get("type_ms", []) or [])  # type: ignore[arg-type]
+    rng = random.Random(read * 131 + think)  # stable per-turn, not metronomic
+    out: list[int] = []
+    for i, t in enumerate(type_ms):
+        if i == 0:
+            out.append(read + think + int(t))
+        else:
+            gap = rng.randint(1200, 3200)  # human beat between bursts
+            out.append(gap + int(t))
+    return out
+
+
 def pacing(inbound: str, replies: list[str], seed: int | None = None) -> list[int]:
     """Back-compat: a single delay (ms) before each message (read+think folded into [0])."""
     p = plan(inbound, replies, seed)
