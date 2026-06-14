@@ -21,6 +21,13 @@ export interface Health {
   channels?: ChannelInfo[];
   live_closer?: boolean;
   sales_stages?: string[];
+  personas?: Persona[];
+}
+
+export interface Persona {
+  key: string;
+  label: string;
+  seed: string;
 }
 
 export interface Evidence {
@@ -203,6 +210,7 @@ export interface Decision {
   handoff: boolean;
   handoff_reason: string;
   cited: string[];
+  pacing?: number[];
   engine?: Engine;
 }
 

@@ -4,13 +4,16 @@ import {
   getCustomer,
   listCustomers,
   sendInbound,
+  simulateCustomer,
 } from "../api";
+import type { InboundResult } from "../api";
 import type {
   ChannelInfo,
   ChatMessage,
   Customer,
   Decision,
   MemoryFact,
+  Persona,
 } from "../types";
 import { Badge } from "../ui";
 import {
@@ -58,12 +61,18 @@ const WIN_TEXT: Record<"red" | "yellow" | "green", string> = {
   green: "text-pale-green-ink",
 };
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// clamp the backend's realistic pacing into a usable range for the live console
+const paceMs = (ms: number | undefined) => Math.min(Math.max(ms ?? 1500, 700), 4500);
+
 export default function ChatConsole({
   channels,
   salesStages,
+  personas,
 }: {
   channels: ChannelInfo[];
   salesStages: string[];
+  personas: Persona[];
 }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [platform, setPlatform] = useState<string>("all");
@@ -73,8 +82,11 @@ export default function ChatConsole({
   const [decision, setDecision] = useState<Decision | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [persona, setPersona] = useState<string>(personas[0]?.key ?? "skeptic");
   const [showNew, setShowNew] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const turnRef = useRef(0);
 
   const selected = customers.find((c) => c.id === selectedId) ?? null;
   const visible =
@@ -103,24 +115,59 @@ export default function ChatConsole({
     setMemory(d.memory);
   }
 
+  // Reveal the AI's reply messages with human-like pacing (read delay + typing),
+  // instead of dumping them instantly. The right-panel reasoning shows at once
+  // (operator insight); only the chat bubbles are paced like a real person.
+  async function playTurn(res: InboundResult, cid: string) {
+    const token = ++turnRef.current;
+    const sentIds = new Set(res.sent.map((s) => s.id));
+    const base = res.messages.filter((m) => !sentIds.has(m.id));
+    const agentMsgs = res.messages.filter((m) => sentIds.has(m.id));
+    setDecision(res.decision);
+    setMemory(res.memory);
+    setCustomers((prev) => prev.map((c) => (c.id === cid ? res.customer : c)));
+    setMessages(base);
+    const pacing = res.decision.pacing ?? [];
+    for (let i = 0; i < agentMsgs.length; i++) {
+      setTyping(true);
+      await sleep(paceMs(pacing[i]));
+      if (turnRef.current !== token) return; // a newer turn / customer took over
+      setMessages((prev) => [...prev, agentMsgs[i]]);
+    }
+    setTyping(false);
+  }
+
   async function handleSend() {
     if (!input.trim() || !selectedId || busy) return;
     const text = input.trim();
+    const cid = selectedId;
     setInput("");
     setBusy(true);
     // optimistic: show the customer's inbound message immediately
     setMessages((prev) => [
       ...prev,
-      { id: `tmp_${Date.now()}`, customer_id: selectedId, role: "customer", text, created_at: Date.now() / 1000 },
+      { id: `tmp_${Date.now()}`, customer_id: cid, role: "customer", text, created_at: Date.now() / 1000 },
     ]);
     try {
-      const res = await sendInbound(selectedId, text);
-      setDecision(res.decision);
-      setMemory(res.memory);
-      setMessages(res.messages);
-      setCustomers((prev) => prev.map((c) => (c.id === selectedId ? res.customer : c)));
+      const res = await sendInbound(cid, text);
+      await playTurn(res, cid);
     } finally {
       setBusy(false);
+      setTyping(false);
+    }
+  }
+
+  // Let the system role-play the customer (different tempers) to pressure-test the closer.
+  async function handleSimulate() {
+    if (!selectedId || busy) return;
+    const cid = selectedId;
+    setBusy(true);
+    try {
+      const res = await simulateCustomer(cid, persona);
+      await playTurn(res, cid);
+    } finally {
+      setBusy(false);
+      setTyping(false);
     }
   }
 
@@ -188,7 +235,7 @@ export default function ChatConsole({
                     <span className="flex gap-1">
                       <Dot /> <Dot /> <Dot />
                     </span>
-                    AI 销冠正在思考并组织话术…
+                    {typing ? "AI 销冠正在输入…" : "AI 销冠正在读消息、组织话术…"}
                   </div>
                 )}
               </div>
@@ -215,8 +262,31 @@ export default function ChatConsole({
                     <IconSend width={16} height={16} /> 发送
                   </button>
                 </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-[11px] text-muted">模拟真实客户：</span>
+                  <select
+                    value={persona}
+                    onChange={(e) => setPersona(e.target.value)}
+                    disabled={busy}
+                    className="rounded-md border border-line bg-bone/40 px-2 py-1 text-[11.5px] text-ink outline-none focus:border-charcoal disabled:opacity-40"
+                  >
+                    {personas.map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => void handleSimulate()}
+                    disabled={busy}
+                    className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11.5px] text-ink transition hover:bg-bone disabled:opacity-40"
+                    title="让系统扮演这种脾气的客户，发一条消息来压测 AI 销冠"
+                  >
+                    让 AI 扮客户发一条
+                  </button>
+                </div>
                 <p className="mt-1.5 text-[11px] text-muted">
-                  你扮演客户，AI 自动以销冠身份回复（沙盒模式）。接入真实渠道后由客户真人发消息。
+                  你可亲自扮客户发消息，或用上方「模拟客户」让不同脾气的买家来压测。接入真实渠道后由客户真人发消息。
                 </p>
               </div>
             </>

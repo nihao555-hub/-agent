@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import llm, store
+from . import humanize, llm, store
 from .retrieval import retrieve
 
 # Canonical sales pipeline — the right panel renders this as a live progress rail
@@ -45,57 +45,6 @@ def _norm_stage(stage: str) -> str:
     if stage in STAGES:
         return stage
     return _STAGE_SYNONYMS.get(stage, stage or "认知")
-
-# Country → methodology IDs to bias localization retrieval toward.
-_COUNTRY_HINTS: dict[str, str] = {
-    "美国": "GLOBAL-01 北美 ROI 直接",
-    "us": "GLOBAL-01 北美 ROI 直接",
-    "日本": "GLOBAL-02 日本 礼仪 稟議 LINE",
-    "japan": "GLOBAL-02 日本 礼仪 稟議 LINE",
-    "中东": "GLOBAL-03 中东 关系 议价 宗教",
-    "沙特": "GLOBAL-03 中东 关系 议价 宗教",
-    "迪拜": "GLOBAL-03 中东 关系 议价 宗教",
-    "东南亚": "GLOBAL-04 东南亚 关系 价格 移动端",
-    "印尼": "GLOBAL-04 东南亚 印尼 宗教",
-    "泰国": "GLOBAL-04 东南亚 泰国 礼貌",
-    "越南": "GLOBAL-04 东南亚 越南 性价比",
-    "欧洲": "GLOBAL-05 欧洲 严谨 GDPR 流程",
-    "德国": "GLOBAL-05 德国 规格 质保",
-    "拉美": "GLOBAL-06 拉美 热情 关系 西语",
-    "巴西": "GLOBAL-06 巴西 葡语 WhatsApp Pix",
-    "印度": "GLOBAL-07 印度 议价 性价比",
-    "中国": "GLOBAL-08 中国 私域 人情 面子",
-    "韩国": "GLOBAL-11 韩国 等级 KakaoTalk",
-    "非洲": "GLOBAL-12 非洲 移动 M-Pesa",
-}
-
-_CATEGORY_HINTS: dict[str, str] = {
-    "saas": "CAT-SAAS 软件 ROI 试用",
-    "软件": "CAT-SAAS 软件 ROI 试用",
-    "电商": "CAT-ECOM 实物 图片 视频 促销",
-    "零售": "CAT-ECOM 实物 图片 视频 促销",
-    "大宗": "CAT-HIGHTICKET 高客单 MEDDIC",
-    "设备": "CAT-HIGHTICKET 高客单 MEDDIC",
-    "金融": "CAT-FININS 合规 信任",
-    "保险": "CAT-FININS 合规 信任",
-    "教育": "CAT-EDU 体验课 效果",
-    "外贸": "CAT-TRADE 报价 物流 付款",
-    "跨境": "CAT-TRADE 报价 物流 付款",
-}
-
-
-def _hint(mapping: dict[str, str], value: str) -> str:
-    v = (value or "").lower()
-    for key, hint in mapping.items():
-        if key in v:
-            return hint
-    return ""
-
-
-def _localization_query(customer: dict[str, Any], settings: dict[str, str]) -> str:
-    country = customer.get("country") or settings.get("target_country", "")
-    category = customer.get("category") or settings.get("target_category", "")
-    return " ".join(filter(None, [_hint(_COUNTRY_HINTS, country), _hint(_CATEGORY_HINTS, category)]))
 
 
 def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]:
@@ -132,13 +81,15 @@ def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]
 
 
 def _build_query(customer: dict[str, Any], inbound: str, settings: dict[str, str]) -> str:
+    # No hardcoded country/category keyword tables — retrieve straight from the
+    # customer's own country/category + the live conversation, and let the model
+    # do the localization reasoning from the rules in its prompt.
     return "\n".join(
         filter(
             None,
             [
-                settings.get("target_category", ""),
-                customer.get("category", ""),
-                _localization_query(customer, settings),
+                customer.get("country", "") or settings.get("target_country", ""),
+                customer.get("category", "") or settings.get("target_category", ""),
                 store.transcript(customer["id"], limit=20),
                 inbound,
             ],
@@ -192,6 +143,14 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "【拟人·别被看出是AI】像真人销售一样聊：禁用 AI 腔和八股套话（如“作为AI”“根据您的需求”"
             "“很高兴为您服务”“以下是”）；句子有长有短、口语化、可带少量语气词与（符合当地习惯的）表情；"
             "不堆砌专业术语、不一次说完所有点；有真人的节奏感。\n"
+            "【销冠推进剧本·一步步把产品推出去】别被动接话，要有意识地按销冠节奏推进，但顺着客户"
+            "当前状态走、不跳步、不硬逼：建立信任与亲和 → 挖掘并放大真实痛点(SPIN) → 把痛点/损失"
+            "量化 → 给针对性方案与差异化价值 → 用具体价值或案例锚定(而非只甩价格) → 逐条化解异议 → "
+            "信号成熟时温和促成下一步(而非逼单) → 收款/合同等交回客户并转人工。每条消息都要让对话"
+            "往前走一步。\n"
+            "【对手识别】若对方明显是同行刺探(套价格/套话术/套供应链)或恶意刁难/钓鱼：不泄露任何敏感"
+            "信息、不被激怒，礼貌而克制，必要时收住话题或转人工。绝不为了“成交”而踩红线或做出让用户"
+            "受损的承诺——红线永远高于成单。\n"
             f"身份披露策略：{disclosure}\n"
             "硬红线（隐私红线官，绝不能违反）：以下信息绝不外发给客户——"
             f"{settings.get('privacy_redlines', '')}。需要用到时只用对外版表述。\n"
@@ -255,6 +214,8 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
     result.setdefault("handoff", False)
     result.setdefault("handoff_reason", "")
     result.setdefault("cited", cited_ids[:5])
+    # human-like send pacing (ms to wait before each message, with a typing indicator)
+    result["pacing"] = humanize.pacing(inbound, result["reply"], seed=len(store.transcript(customer_id)))
     result["evidence"] = evidence
     result["engine"] = "llm" if llm.llm_available() else "fallback"
     return result

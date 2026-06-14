@@ -91,6 +91,7 @@ export default function App() {
           <ChatConsole
             channels={health?.channels ?? []}
             salesStages={health?.sales_stages ?? []}
+            personas={health?.personas ?? []}
           />
         )}
 

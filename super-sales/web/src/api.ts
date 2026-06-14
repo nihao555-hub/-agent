@@ -60,6 +60,27 @@ export async function sendInbound(
   return r.json();
 }
 
+export interface InboundResult {
+  decision: Decision;
+  sent: ChatMessage[];
+  customer: Customer;
+  messages: ChatMessage[];
+  memory: MemoryFact[];
+  persona?: string;
+}
+
+export async function simulateCustomer(
+  id: string,
+  persona: string,
+): Promise<InboundResult> {
+  const r = await fetch(`/api/customers/${id}/simulate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona, auto_send: true }),
+  });
+  return r.json();
+}
+
 export async function getSample(): Promise<{ conversation: string; product: string }> {
   const r = await fetch("/api/sample");
   return r.json();

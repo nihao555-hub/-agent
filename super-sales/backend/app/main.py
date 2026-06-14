@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import channels, closer, llm, store
+from . import channels, closer, llm, simulator, store
 from .graph import NODE_OUTPUT_FIELD, PIPELINE, build_graph
 from .retrieval import retrieval_backend
 from .state import SalesState
@@ -64,6 +64,7 @@ def health() -> dict[str, object]:
         "channels": channels.list_channels(),
         "live_closer": True,
         "sales_stages": closer.STAGES,
+        "personas": simulator.list_personas(),
     }
 
 
@@ -257,6 +258,26 @@ def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
         "messages": store.list_messages(cid),
         "memory": store.list_memory(cid),
     }
+
+
+class SimulateRequest(BaseModel):
+    persona: str = Field("skeptic", description="客户人设 key")
+    auto_send: bool = Field(True, description="生成客户消息后是否立即跑 AI 销冠回复")
+
+
+@app.post("/api/customers/{cid}/simulate")
+def post_simulate(cid: str, req: SimulateRequest) -> dict[str, object]:
+    """Generate the *customer*'s next message (in character) and optionally let
+    the AI closer respond — lets us pressure-test against different tempers."""
+    if store.get_customer(cid) is None:
+        return {"error": "customer not found"}
+    sim = simulator.next_message(cid, req.persona)
+    if not req.auto_send:
+        msg = store.add_message(cid, "customer", sim["text"])
+        return {"customer_message": msg, "persona": sim["persona"], "messages": store.list_messages(cid)}
+    result = post_inbound(cid, InboundMessage(text=sim["text"], auto_send=True))
+    result["persona"] = sim["persona"]
+    return result
 
 
 @app.post("/api/customers/{cid}/send")
