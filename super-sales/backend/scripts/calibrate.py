@@ -45,7 +45,7 @@ if _ENV.exists():
 os.environ["SUPER_SALES_DB"] = os.getenv("CALIB_DB") or os.path.join(
     tempfile.gettempdir(), f"calib_{int(time.time())}.db")
 
-from app import closer, llm, reflect, simulator, store  # noqa: E402
+from app import closer, humanize, llm, reflect, simulator, store  # noqa: E402
 
 # A few realistic seller scenarios spanning B2B SaaS, B2B hardware, and B2C goods.
 SCENARIOS: list[dict[str, Any]] = [
@@ -274,17 +274,29 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
 
 
 def _print_turn(n: int, buyer: str, inbound: str, decision: dict[str, Any]) -> None:
-    """Live per-turn trace so a human can watch the deal unfold in real time."""
+    """Live per-turn trace so a human can watch the deal unfold in real time —
+    including the *humanized timing* (how many seconds until the first bubble,
+    then the gap before each next one) and each bubble's character count, so the
+    短消息/打字节奏 behavior is directly visible, not hidden in metadata."""
     print(f"\n  ── 第 {n} 轮 ──", flush=True)
     print(f"  客户 {buyer}: {inbound}", flush=True)
     replies = decision.get("reply") or []
     trans = decision.get("reply_translation") or []
+    delays = humanize.send_delays({
+        "read_ms": decision.get("read_ms", 0),
+        "think_ms": decision.get("think_ms", 0),
+        "type_ms": decision.get("type_ms", []),
+    })
     for i, r in enumerate(replies):
         zh = f"   〔{trans[i]}〕" if i < len(trans) and trans[i] and trans[i] != r else ""
-        print(f"  AI 销冠 ▸ {r}{zh}", flush=True)
+        secs = round((delays[i] if i < len(delays) else 1200) / 1000.0, 1)
+        timing = f"你回复后 {secs}s" if i == 0 else f"间隔 {secs}s"
+        print(f"  ⏱ {timing} · 正在输入…", flush=True)
+        print(f"  AI 销冠 ▸ {r}{zh}  [{len(r)}字]", flush=True)
     moves = decision.get("moves") or []
     move_str = "，".join(f"{m.get('method', '')}:{m.get('move', '')}" for m in moves[:3])
-    print(f"  ▸ 阶段={decision.get('stage', '')} 赢率={decision.get('win_score', '')} "
+    print(f"  ▸ 共 {len(replies)} 条 · 每条字数={[len(r) for r in replies]} | "
+          f"阶段={decision.get('stage', '')} 赢率={decision.get('win_score', '')} "
           f"语言={decision.get('customer_lang', '')} | 方法={move_str or '—'}", flush=True)
 
 

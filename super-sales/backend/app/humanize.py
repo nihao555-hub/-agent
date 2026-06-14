@@ -13,7 +13,132 @@ it from feeling metronomic without making tests flaky (seeded per turn).
 
 from __future__ import annotations
 
+import os
 import random
+import re
+
+# --- short-message reshaping ------------------------------------------------
+# Real top closers send short IM bubbles, never 200-char essays. The prompt asks
+# the model to keep messages short, but prompts alone don't *guarantee* it — so
+# this deterministic guard reshapes whatever the model returns into short bubbles
+# regardless of model whims (and also covers the offline/fallback path). It only
+# fires on genuinely long messages: short replies pass through untouched, so it
+# never imposes a fixed "always N bubbles" cadence — the count tracks content.
+_MSG_CAP = int(os.getenv("HUMANIZE_MSG_CAP", "48"))      # soft per-bubble char cap
+_MAX_BUBBLES = int(os.getenv("HUMANIZE_MAX_BUBBLES", "5"))  # never explode a turn past this
+_SENT_ENDERS = "。！？；…⁇⁈⁉．!?;"  # CJK + fullwidth + ascii sentence enders
+_CLAUSE_SEPS = "、，,；;/／│|"      # secondary break points inside an over-long sentence
+_BREAKABLE = _CLAUSE_SEPS + " \t"  # plus whitespace, so long latin clauses can break on words
+
+
+def _sentences(text: str) -> list[str]:
+    """Split into sentence-ish chunks, keeping the terminal punctuation. ASCII '.'
+    only ends a sentence when followed by whitespace/end, so prices/decimals like
+    ``3.999`` and abbreviations stay intact."""
+    out: list[str] = []
+    buf = ""
+    for i, ch in enumerate(text):
+        buf += ch
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if ch == "\n":
+            out.append(buf)
+            buf = ""
+        elif ch == ".":
+            if nxt in ("", " ", "\n", "\t"):
+                out.append(buf)
+                buf = ""
+        elif ch in _SENT_ENDERS:
+            out.append(buf)
+            buf = ""
+    if buf:
+        out.append(buf)
+    return [s.strip() for s in out if s.strip()]
+
+
+def _atoms(text: str, cap: int) -> list[str]:
+    """Sentence chunks, but any sentence still longer than ``cap`` is further
+    broken at clause separators (、，；/ …) so no single atom is a wall of text.
+    A clause with no separators at all is left intact (we never cut mid-word)."""
+    out: list[str] = []
+    for s in _sentences(text):
+        if len(s) <= cap:
+            out.append(s)
+            continue
+        buf = ""
+        for ch in s:
+            buf += ch
+            if ch in _BREAKABLE and len(buf) >= cap * 0.6:
+                out.append(buf.strip())
+                buf = ""
+        if buf.strip():
+            out.append(buf.strip())
+    return [a for a in out if a]
+
+
+def _join(a: str, b: str) -> str:
+    """Concatenate two sentence chunks, inserting a space only between latin words
+    (CJK runs together as it would in real typing)."""
+    if a and b and re.search(r"[A-Za-z0-9]$", a) and re.match(r"[A-Za-z0-9]", b):
+        return f"{a} {b}"
+    return a + b
+
+
+def _pack(atoms: list[str], cap: int) -> list[str]:
+    """Greedily pack atoms into bubbles, each kept under ``cap`` (a single atom
+    bigger than cap becomes its own bubble — we never cut mid-clause)."""
+    bubbles: list[str] = []
+    cur = ""
+    for s in atoms:
+        if cur and len(cur) + len(s) > cap:
+            bubbles.append(cur)
+            cur = s
+        else:
+            cur = _join(cur, s) if cur else s
+    if cur:
+        bubbles.append(cur)
+    return bubbles
+
+
+def reshape(replies: list[str], translations: list[str] | None = None,
+            cap: int | None = None, max_bubbles: int | None = None) -> tuple[list[str], list[str]]:
+    """Reshape model replies into short IM bubbles, keeping translations aligned.
+
+    A bubble already under ``cap`` is left exactly as-is. A long one is split at
+    sentence boundaries and its sentences are greedily re-packed so each bubble
+    stays under ``cap``; if that still yields more than ``max_bubbles`` bubbles the
+    overflow is merged back into the last one (we never *drop* content). The
+    operator-facing translation rides on the first sub-bubble of each source
+    message (it's internal-only, so exact per-bubble alignment isn't needed)."""
+    cap = cap or _MSG_CAP
+    max_bubbles = max_bubbles or _MAX_BUBBLES
+    translations = translations or []
+    out_r: list[str] = []
+    out_t: list[str] = []
+    for idx, raw in enumerate(replies):
+        msg = (raw or "").strip()
+        if not msg:
+            continue
+        tr = translations[idx] if idx < len(translations) else ""
+        if len(msg) <= cap:
+            out_r.append(msg)
+            out_t.append(tr)
+            continue
+        atoms = _atoms(msg, cap)
+        bubbles = _pack(atoms, cap)
+        if len(bubbles) > max_bubbles:
+            # Too many bubbles → widen the cap until they pack into ~max_bubbles
+            # roughly-equal short bubbles (never one fat tail). Guaranteed to
+            # terminate: at cap == total it collapses to a single bubble.
+            total = sum(len(a) for a in atoms)
+            even_cap = max(cap, -(-total // max_bubbles))  # ceil(total / max_bubbles)
+            while len(_pack(atoms, even_cap)) > max_bubbles and even_cap < total:
+                even_cap += max(4, cap // 4)
+            bubbles = _pack(atoms, even_cap)
+        for j, b in enumerate(bubbles):
+            out_r.append(b.strip())
+            out_t.append(tr if j == 0 else "")
+    return out_r, out_t
+
 
 # tuning knobs (milliseconds) — tuned for *real* sales rhythm, not instant replies
 _READ_MS_PER_CHAR = 35          # time to "read" the customer's message
