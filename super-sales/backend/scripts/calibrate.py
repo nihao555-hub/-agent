@@ -38,9 +38,14 @@ if _ENV.exists():
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-os.environ["SUPER_SALES_DB"] = os.path.join(tempfile.gettempdir(), f"calib_{int(time.time())}.db")
+# Isolated throwaway DB by default. Set CALIB_DB to a fixed path to *persist* the
+# learned-lesson library across separate runs — needed to demonstrate the RL loop:
+# run --split tune --learn (collect lessons), then --split eval (frozen) to see if
+# the accumulated experience generalizes to held-out buyers.
+os.environ["SUPER_SALES_DB"] = os.getenv("CALIB_DB") or os.path.join(
+    tempfile.gettempdir(), f"calib_{int(time.time())}.db")
 
-from app import closer, llm, simulator, store  # noqa: E402
+from app import closer, llm, reflect, simulator, store  # noqa: E402
 
 # A few realistic seller scenarios spanning B2B SaaS, B2B hardware, and B2C goods.
 SCENARIOS: list[dict[str, Any]] = [
@@ -96,6 +101,89 @@ B2C_IDENTITIES: list[dict[str, str]] = [
     {"name": "张磊", "country": "China", "org": "", "role": "自驾露营用户"},
 ]
 
+# Held-out EVAL scenarios — DIFFERENT products than the tune SCENARIOS above, so
+# evaluating here measures generalization, not memorization of the tune set.
+EVAL_SCENARIOS: list[dict[str, Any]] = [
+    {
+        "product": {
+            "name": "PalletPro 智能仓储 WMS",
+            "summary": "中大型仓库的库存与拣货优化系统，降低错发与人力成本。",
+            "details": "实时库存、波次拣货、RF/PDA、ERP 对接、KPI 看板；按仓/年订阅+实施费。",
+            "price_info": "标准版每仓 8 万/年起，含基础实施；多仓与定制另议。",
+            "price_min": 80000.0, "price_max": 1200000.0, "currency": "CNY",
+        },
+        "customer_type": "b2b",
+        "category": "仓储/WMS",
+        "lead_intel": {
+            "industry": "第三方物流/制造分销",
+            "scale": "500-2000 人，多仓运营",
+            "money": "旺季错发与人力成本高，董事会要求今年上系统",
+            "tech_stack": ["SAP", "用友", "自研 Excel 台账"],
+            "competition": "在比某国际 WMS，也考虑沿用现有 ERP 模块/继续人工",
+            "developments": ["新开两个区域仓", "错发投诉上升被大客户施压"],
+        },
+    },
+    {
+        "product": {
+            "name": "AirPure 车载空气净化器 X1",
+            "summary": "车内除甲醛/PM2.5，静音、即插即用，适合有小孩/宠物的家庭。",
+            "details": "HEPA+活性炭、CADR 60、USB-C、滤芯易换；附赠车载支架。",
+            "price_info": "零售 699 元，活动 549 元，两件包邮再送一组滤芯。",
+            "price_min": 459.0, "price_max": 699.0, "currency": "CNY",
+        },
+        "customer_type": "b2c",
+        "category": "车载净化",
+    },
+]
+
+# Hidden temperaments split into a TUNE set (used while collecting lessons / tuning
+# prompts) and a held-out EVAL set (only ever used to score generalization).
+TUNE_PERSONAS = ["haggler", "skeptic", "competitor", "eager"]
+EVAL_PERSONAS = ["aloof_dm", "warm_indecisive", "detail"]
+
+
+def _split_pools(split: str) -> tuple[list[dict[str, Any]], int, int, list[str]]:
+    """Return (scenarios, b2b_slice_idx, b2c_slice_idx, personas) for a split.
+
+    tune  → first half of each identity pool + tune scenarios + tune personas
+    eval  → second half (unseen buyers) + held-out products + held-out personas
+    all   → everything (no separation; for ad-hoc smoke runs)."""
+    if split == "tune":
+        return SCENARIOS, 0, 0, TUNE_PERSONAS
+    if split == "eval":
+        return EVAL_SCENARIOS, 3, 3, EVAL_PERSONAS
+    return SCENARIOS + EVAL_SCENARIOS, 0, 0, TUNE_PERSONAS + EVAL_PERSONAS
+
+
+def _pick_identities(scenario: dict[str, Any], offset: int, n: int) -> list[dict[str, str]]:
+    pool = B2B_IDENTITIES if scenario["customer_type"] == "b2b" else B2C_IDENTITIES
+    chosen = pool[offset:] if offset else pool
+    return chosen[: max(1, n)]
+
+
+def _generate_cases(n: int, rng: random.Random) -> list[dict[str, Any]]:
+    """LLM-generate fresh, never-before-seen (product + buyer + hidden persona)
+    cases. This is the strongest anti-overfit source: nothing is reused between
+    runs, so the closer cannot learn the test set."""
+    system = (
+        "你在为一个全球销售 AI 的压测生成**全新、逼真且多样**的测试用例。"
+        "每个用例 = 一个真实可信的销售场景(产品)+一个真实买家身份+一个对销售保密的隐藏性格/议程。"
+        "要求多样：覆盖不同国家/语言/行业、B2B 与 B2C 混合、不同性格(砍价/多疑/高冷/犹豫/技术控/同行刺探/"
+        "爽快但易分心…)、不同隐藏议程。数字合理。只输出 JSON："
+        "{\"cases\":[{\"product\":{\"name\",\"summary\",\"details\",\"price_info\","
+        "\"price_min\"(数字),\"price_max\"(数字),\"currency\"},\"customer_type\":\"b2b|b2c\","
+        "\"category\",\"lead_intel\":{\"industry\",\"scale\",\"money\",\"tech_stack\":[],"
+        "\"competition\",\"developments\":[]},\"identity\":{\"name\",\"country\",\"org\",\"role\"},"
+        "\"hidden_persona\":{\"label\",\"seed\"}}]}。B2C 的 org 可留空、lead_intel 可省略。"
+    )
+    user = f"生成 {n} 个互不相同的用例，国家/行业/性格尽量不重复。随机种子提示：{rng.randint(1000, 9999)}。"
+    try:
+        data = llm.chat_json(system, user, temperature=1.0)
+        cases = data.get("cases") if isinstance(data, dict) else None
+        return cases[:n] if isinstance(cases, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
 
 def _seed_lead_packet(cid: str, scenario: dict[str, Any], identity: dict[str, str]) -> None:
     """Inject the *production-grade* lead packet a real seller would already hold
@@ -124,7 +212,8 @@ def _seed_lead_packet(cid: str, scenario: dict[str, Any], identity: dict[str, st
 
 
 def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict[str, str],
-                      turns: int, live: bool = False) -> dict[str, Any]:
+                      turns: int, live: bool = False, learn: bool = False,
+                      persona_override: dict[str, str] | None = None) -> dict[str, Any]:
     # The closer sees only legitimate lead info (incl. the seeded lead packet).
     # The persona (emotion/temperament) is passed ONLY to the customer simulator
     # → our AI stays grey-box on facts, black-box on the buyer's psychology.
@@ -141,14 +230,15 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
     )
     cid = cust["id"]
     _seed_lead_packet(cid, scenario, identity)
+    persona_disp = (persona_override or {}).get("label") or persona_key
     if live:
         org = identity.get("org") or identity["role"]
         print(f"\n{'═'*72}\n▶ {scenario['product']['name']} | 买家 {identity['name']}（{org}，{identity['country']}）"
-              f" | 隐藏人设={persona_key}\n{'═'*72}", flush=True)
+              f" | 隐藏人设={persona_disp}\n{'═'*72}", flush=True)
     handoff = False
     final_stage = ""
     for t in range(turns):
-        sim = simulator.next_message(cid, persona_key)
+        sim = simulator.next_message(cid, persona_key, persona_override=persona_override)
         store.add_message(cid, "customer", sim["text"])
         decision = closer.decide(cid, sim["text"])
         closer.apply_decision(cid, decision)
@@ -160,14 +250,25 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
             if live:
                 print(f"    ⟶ 触发转人工：{decision.get('handoff_reason', '')}", flush=True)
             break
+    learned: list[str] = []
+    if learn:
+        # Reflexion: distill generalized lessons from how this deal went, so the
+        # closer compounds experience. Only done on the TUNE split (never eval).
+        outcome = "handoff" if handoff else ("won" if "成交" in final_stage else "stalled")
+        for ls in reflect.reflect_and_learn(cid, outcome=outcome):
+            learned.append(ls["lesson"])
+        if live and learned:
+            for ls in learned:
+                print(f"    ✎ 学到经验：{ls}", flush=True)
     return {
         "customer_id": cid,
-        "hidden_persona": persona_key,  # what the buyer secretly was; closer never saw it
+        "hidden_persona": persona_disp,  # what the buyer secretly was; closer never saw it
         "buyer": f"{identity['name']}（{identity.get('org') or identity['role']}）",
         "country": identity["country"],
         "scenario": scenario["product"]["name"],
         "handoff": handoff,
         "final_stage": final_stage,
+        "learned": learned,
         "transcript": store.transcript(cid, limit=80),
     }
 
@@ -187,9 +288,13 @@ def _print_turn(n: int, buyer: str, inbound: str, decision: dict[str, Any]) -> N
           f"语言={decision.get('customer_lang', '')} | 方法={move_str or '—'}", flush=True)
 
 
-def _ai_suspicion(convo: dict[str, Any]) -> dict[str, Any]:
+def _ai_suspicion(convo: dict[str, Any], models: list[str] | None = None) -> dict[str, Any]:
     """Score, FROM THE CUSTOMER'S OWN POV, how likely they think the other side
-    was an AI/bot (0=完全像真人, 100=确信是AI). Lower is better for us."""
+    was an AI/bot (0=完全像真人, 100=确信是AI). Lower is better for us.
+
+    DIAGNOSTIC metric only — never optimize the prompt directly against it
+    (Goodhart). ``models`` runs multiple (ideally different) judge models and
+    averages, to de-correlate from the closer's own model and reduce overfit."""
     if not llm.llm_available():
         return {"ai_suspicion": -1, "verdict": "未评", "tells": []}
     system = (
@@ -200,21 +305,36 @@ def _ai_suspicion(convo: dict[str, Any]) -> dict[str, Any]:
         "tells(让你起疑的具体细节数组,最多3条)。"
     )
     user = f"【你和这个销售的完整对话】(\u201c我\u201d=销售/对方, \u201c客户\u201d=你)\n{convo['transcript']}\n\n你觉得对方是 AI 吗？"
-    try:
-        data = llm.chat_json(system, user, temperature=0.3)
-    except Exception:  # noqa: BLE001
+    vals: list[int] = []
+    verdicts: list[str] = []
+    tells: list[str] = []
+    for mdl in (models or [None]):
+        try:
+            data = llm.chat_json(system, user, temperature=0.3, model=mdl)
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            vals.append(int(data.get("ai_suspicion", -1)))
+        except (TypeError, ValueError):
+            pass
+        if data.get("verdict"):
+            verdicts.append(str(data.get("verdict")))
+        tells.extend(data.get("tells", []) or [])
+    valid = [v for v in vals if v >= 0]
+    if not valid:
         return {"ai_suspicion": -1, "verdict": "评分失败", "tells": []}
-    try:
-        susp = int(data.get("ai_suspicion", -1))
-    except (TypeError, ValueError):
-        susp = -1
-    return {"ai_suspicion": susp, "verdict": data.get("verdict", ""), "tells": data.get("tells", [])}
+    return {
+        "ai_suspicion": round(statistics.mean(valid)),
+        "verdict": max(set(verdicts), key=verdicts.count) if verdicts else "",
+        "tells": tells[:3],
+        "judges": len(valid),
+    }
 
 
 _JUDGE_DIMS = ["professionalism", "objection_handling", "advancement", "guardrails", "humanlike", "win_likelihood"]
 
 
-def _judge(convo: dict[str, Any]) -> dict[str, Any]:
+def _judge(convo: dict[str, Any], models: list[str] | None = None) -> dict[str, Any]:
     if not llm.llm_available():
         return {"scores": {d: 0 for d in _JUDGE_DIMS}, "note": "LLM 不可用，跳过评分"}
     system = (
@@ -226,60 +346,117 @@ def _judge(convo: dict[str, Any]) -> dict[str, Any]:
         "humanlike 指像不像真人(不机械、不AI腔)。"
     )
     user = f"【对话】(\u201c我\u201d=AI销售)\n{convo['transcript']}\n\n请打分。"
-    try:
-        data = llm.chat_json(system, user, temperature=0.2)
-    except Exception as e:  # noqa: BLE001
-        return {"scores": {d: 0 for d in _JUDGE_DIMS}, "note": f"评分失败: {e}"}
-    scores = data.get("scores", {}) if isinstance(data.get("scores"), dict) else {}
-    clean = {d: int(scores.get(d, 0) or 0) for d in _JUDGE_DIMS}
+    per_dim: dict[str, list[int]] = {d: [] for d in _JUDGE_DIMS}
+    issues: list[str] = []
+    fixes: list[str] = []
+    note = ""
+    for mdl in (models or [None]):
+        try:
+            data = llm.chat_json(system, user, temperature=0.2, model=mdl)
+        except Exception as e:  # noqa: BLE001
+            note = f"评分失败: {e}"
+            continue
+        scores = data.get("scores", {}) if isinstance(data.get("scores"), dict) else {}
+        for d in _JUDGE_DIMS:
+            per_dim[d].append(int(scores.get(d, 0) or 0))
+        issues.extend(data.get("issues", []) or [])
+        if data.get("fix"):
+            fixes.append(str(data.get("fix")))
+    if not any(per_dim[d] for d in _JUDGE_DIMS):
+        return {"scores": {d: 0 for d in _JUDGE_DIMS}, "note": note or "评分失败"}
+    clean = {d: round(statistics.mean(v)) if v else 0 for d, v in per_dim.items()}
+    weakest = min(clean.items(), key=lambda kv: kv[1])[0]
     return {
         "scores": clean,
-        "weakest": data.get("weakest", ""),
-        "issues": data.get("issues", []),
-        "fix": data.get("fix", ""),
+        "weakest": weakest,
+        "issues": issues[:3],
+        "fix": fixes[0] if fixes else "",
     }
+
+
+def _build_cases(args: Any, rng: random.Random) -> list[dict[str, Any]]:
+    """Assemble the conversation cases for this run, honoring the anti-overfit
+    source/split. Each case = {scenario, identity, persona_key, persona_override}."""
+    cases: list[dict[str, Any]] = []
+    if args.source == "generated":
+        for gc in _generate_cases(args.generate, rng):
+            ident = gc.get("identity") or {}
+            if not ident.get("name"):
+                continue
+            scenario = {k: gc[k] for k in ("product", "customer_type", "category", "lead_intel") if k in gc}
+            scenario.setdefault("customer_type", "b2b")
+            scenario.setdefault("category", gc.get("category", "通用"))
+            cases.append({
+                "scenario": scenario,
+                "identity": {"name": ident.get("name"), "country": ident.get("country", ""),
+                             "org": ident.get("org", ""), "role": ident.get("role", "")},
+                "persona_key": "",
+                "persona_override": gc.get("hidden_persona") or {},
+            })
+        return cases
+    scenarios, b2b_off, b2c_off, personas = _split_pools(args.split)
+    for sc in scenarios:
+        offset = b2b_off if sc["customer_type"] == "b2b" else b2c_off
+        for identity in _pick_identities(sc, offset, args.buyers):
+            for _ in range(args.rounds):
+                cases.append({
+                    "scenario": sc, "identity": identity,
+                    "persona_key": rng.choice(personas), "persona_override": None,
+                })
+    return cases
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=1, help="每个 买家×场景 组合跑几轮（人设每轮随机、对我方保密）")
     ap.add_argument("--turns", type=int, default=6, help="每段对话最多多少来回")
-    ap.add_argument("--personas", default="haggler,skeptic,aloof_dm,competitor,warm_indecisive",
-                    help="可被随机抽到的隐藏人设池（逗号分隔），我方 AI 不可见")
     ap.add_argument("--buyers", type=int, default=3, help="每个场景使用前 N 个买家身份")
     ap.add_argument("--seed", type=int, default=0, help="随机种子（固定可复现）")
+    ap.add_argument("--split", choices=["tune", "eval", "all"], default="eval",
+                    help="tune=调参集 / eval=留出集(报泛化分,默认) / all=全部")
+    ap.add_argument("--source", choices=["fixed", "generated"], default="fixed",
+                    help="fixed=用内置(已分调参/留出)池 / generated=每轮 LLM 现生成全新买家场景(最强抗过拟合)")
+    ap.add_argument("--generate", type=int, default=6, help="generated 模式下现生成多少个全新用例")
+    ap.add_argument("--judge-models", default="",
+                    help="评审模型(逗号分隔)。留空=用销冠同款；填不同模型可去相关、减少过拟合，多个则取均值")
+    ap.add_argument("--learn", action="store_true",
+                    help="每段对话后做 Reflexion 自我反思并写入经验库（建议只在 tune 上开，eval 关）")
     ap.add_argument("--live", action="store_true", help="逐轮实时打印对话过程")
     ap.add_argument("--out", default="calib_report.json")
     args = ap.parse_args()
     rng = random.Random(args.seed or None)
+    judge_models = [m.strip() for m in args.judge_models.split(",") if m.strip()] or None
 
-    for sc in SCENARIOS:
-        p = sc["product"]
-        store.create_product(p["name"], p["summary"], p["details"], p["price_info"],
-                              p["price_min"], p["price_max"], p["currency"])
+    cases = _build_cases(args, rng)
+    seen_products: set[str] = {p["name"] for p in store.list_products()}
+    for c in cases:
+        p = c["scenario"].get("product") or {}
+        if p.get("name") and p["name"] not in seen_products:
+            store.create_product(p.get("name", ""), p.get("summary", ""), p.get("details", ""),
+                                  p.get("price_info", ""), p.get("price_min"), p.get("price_max"),
+                                  p.get("currency", ""))
+            seen_products.add(p["name"])
 
-    persona_pool = [k.strip() for k in args.personas.split(",") if k.strip()]
-    print(f"LLM available: {llm.llm_available()} | model: {llm.model_name()}", flush=True)
-    print(f"灰盒校准：AI 拿到生产级线索包(公司/规模/技术栈/竞争/决策人)，但买家情绪/人设保密 | "
-          f"隐藏人设池={persona_pool} | buyers/场景={args.buyers} rounds={args.rounds} turns={args.turns}\n", flush=True)
+    print(f"LLM available: {llm.llm_available()} | 销冠模型: {llm.model_name()} | "
+          f"评审模型: {judge_models or '同销冠'}", flush=True)
+    print(f"灰盒校准：AI 拿到生产级线索包(公司/规模/技术栈/竞争/决策人)，买家情绪/人设保密。\n"
+          f"抗过拟合：source={args.source} split={args.split} learn={args.learn} | "
+          f"用例数={len(cases)} turns={args.turns}（被识破AI%为诊断指标，不作优化目标）\n", flush=True)
 
     convos: list[dict[str, Any]] = []
-    for sc in SCENARIOS:
-        pool = (B2B_IDENTITIES if sc["customer_type"] == "b2b" else B2C_IDENTITIES)[: max(1, args.buyers)]
-        for identity in pool:
-            for _ in range(args.rounds):
-                # hidden persona is drawn at random and given ONLY to the buyer sim.
-                pk = rng.choice(persona_pool)
-                convo = _run_conversation(sc, pk, identity, args.turns, live=args.live)
-                convo["judge"] = _judge(convo)
-                convo["ai_detect"] = _ai_suspicion(convo)
-                convos.append(convo)
-                s = convo["judge"]["scores"]
-                avg = round(statistics.mean(s.values()), 1) if s else 0
-                susp = convo["ai_detect"]["ai_suspicion"]
-                print(f"  [{convo['scenario'][:14]:<14}] {identity['name']:<16} {identity['country']:<13} "
-                      f"效果avg={avg:<4} 被识破AI={susp}%({convo['ai_detect'].get('verdict','')}) "
-                      f"handoff={convo['handoff']} stage={convo['final_stage']} (隐藏人设={pk})", flush=True)
+    for c in cases:
+        convo = _run_conversation(c["scenario"], c["persona_key"], c["identity"], args.turns,
+                                  live=args.live, learn=args.learn,
+                                  persona_override=c.get("persona_override"))
+        convo["judge"] = _judge(convo, models=judge_models)
+        convo["ai_detect"] = _ai_suspicion(convo, models=judge_models)
+        convos.append(convo)
+        s = convo["judge"]["scores"]
+        avg = round(statistics.mean(s.values()), 1) if s else 0
+        susp = convo["ai_detect"]["ai_suspicion"]
+        print(f"  [{convo['scenario'][:14]:<14}] {convo['buyer'][:18]:<18} {convo['country']:<13} "
+              f"效果avg={avg:<4} 被识破AI={susp}%({convo['ai_detect'].get('verdict','')}) "
+              f"handoff={convo['handoff']} stage={convo['final_stage']} (隐藏人设={convo['hidden_persona']})", flush=True)
 
     # aggregate
     per_dim: dict[str, list[int]] = {d: [] for d in _JUDGE_DIMS}
@@ -293,6 +470,7 @@ def main() -> None:
     susp_vals = [c["ai_detect"]["ai_suspicion"] for c in convos if c["ai_detect"]["ai_suspicion"] >= 0]
     ai_suspicion_avg = round(statistics.mean(susp_vals), 1) if susp_vals else -1
     all_tells = [t for c in convos for t in c["ai_detect"].get("tells", [])]
+    learned_total = [ls for c in convos for ls in c.get("learned", [])]
 
     report = {
         "summary": {
@@ -301,17 +479,27 @@ def main() -> None:
             "weakest_dimensions": [w[0] for w in weakest],
             "handoff_rate": handoff_rate,
             "ai_suspicion_avg": ai_suspicion_avg,
+            "ai_suspicion_note": "诊断指标(客户视角),仅用于发现方向,不作为提示词优化目标",
+        },
+        "config": {
+            "source": args.source, "split": args.split, "learn": args.learn,
+            "judge_models": judge_models or [llm.model_name()],
+            "closer_model": llm.model_name(),
         },
         "top_issues": all_issues[:20],
         "ai_tells": all_tells[:20],
+        "lessons_learned": learned_total,
+        "lessons_library_size": len(store.list_lessons(limit=1000)),
         "conversations": convos,
     }
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print("\n=== 维度均分（效果，0-10）===", flush=True)
     for d, v in dim_avg.items():
         print(f"  {d:<20} {v}", flush=True)
-    print(f"\n【客户视角·被识破是AI的概率】平均 {ai_suspicion_avg}%（越低越像真人）", flush=True)
-    print(f"最弱维度: {[w[0] for w in weakest]} | 转人工率: {handoff_rate}", flush=True)
+    print(f"\n【客户视角·被识破是AI的概率·诊断】平均 {ai_suspicion_avg}%（越低越像真人；仅诊断，不作优化目标）", flush=True)
+    print(f"最弱维度: {[w[0] for w in weakest]} | 转人工率: {handoff_rate} | "
+          f"数据源={args.source}/{args.split} | 本轮新学经验={len(learned_total)} 条 "
+          f"| 经验库累计={report['lessons_library_size']} 条", flush=True)
     print(f"报告已写入: {args.out}", flush=True)
 
 

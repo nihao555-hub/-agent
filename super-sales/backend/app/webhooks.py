@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from . import closer, store
+from . import closer, reflect, store
 
 
 def _ingest(platform: str, external_id: str, text: str, name: str = "") -> dict[str, Any]:
@@ -50,6 +50,11 @@ def _ingest(platform: str, external_id: str, text: str, name: str = "") -> dict[
     sent: list[dict[str, Any]] = []
     if mode != "semi":
         sent = closer.apply_decision(cid, decision)
+    if decision.get("handoff"):
+        try:
+            reflect.reflect_and_learn(cid, outcome="handoff")
+        except Exception:  # noqa: BLE001
+            pass
     return {
         "ok": True,
         "customer_id": cid,

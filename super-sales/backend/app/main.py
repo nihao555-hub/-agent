@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import background_check, channels, closer, llm, simulator, store, webhooks
+from . import background_check, channels, closer, llm, reflect, simulator, store, webhooks
 from .graph import NODE_OUTPUT_FIELD, PIPELINE, build_graph
 from .retrieval import retrieval_backend
 from .state import SalesState
@@ -288,6 +288,12 @@ def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
     sent: list[dict[str, object]] = []
     if auto:
         sent = closer.apply_decision(cid, decision)
+    if decision.get("handoff"):
+        # Terminal-ish event: reflect on the deal so the closer compounds experience.
+        try:
+            reflect.reflect_and_learn(cid, outcome="handoff")
+        except Exception:  # noqa: BLE001
+            pass
     decision.pop("evidence", None)
     return {
         "decision": decision,
@@ -394,3 +400,20 @@ def post_product(req: ProductCreate) -> dict[str, object]:
 @app.post("/api/assets")
 def post_asset(req: AssetCreate) -> dict[str, object]:
     return store.add_asset(req.product_id, req.kind, req.filename, req.caption, req.shareable)
+
+
+@app.get("/api/lessons")
+def get_lessons(scope: str = "") -> dict[str, object]:
+    """The self-improvement library: generalized lessons the closer learned from
+    past deals (sorted by reinforcement weight), now applied on every turn."""
+    return {"lessons": store.list_lessons(scope=scope, limit=500)}
+
+
+@app.post("/api/customers/{cid}/reflect")
+def post_reflect(cid: str) -> dict[str, object]:
+    """Manually trigger a Reflexion pass on a finished conversation (e.g. after a
+    deal is won/lost) so the closer distills and stores generalized lessons."""
+    if store.get_customer(cid) is None:
+        return {"error": "customer not found"}
+    learned = reflect.reflect_and_learn(cid)
+    return {"learned": learned, "lessons_library_size": len(store.list_lessons(limit=1000))}

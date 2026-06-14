@@ -111,6 +111,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             data TEXT NOT NULL,        -- JSON: public company recon + LLM brief
             created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS lessons (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL DEFAULT 'all',   -- b2b | b2c | all
+            trigger TEXT NOT NULL,               -- when it applies (generalized situation tag)
+            lesson TEXT NOT NULL,                -- the do/don't, generalized (no names/specifics)
+            outcome TEXT DEFAULT '',             -- won | lost | handoff | stalled
+            weight REAL NOT NULL DEFAULT 1.0,    -- reinforcement weight (validated lessons survive)
+            hits INTEGER NOT NULL DEFAULT 0,     -- times reinforced/seen again
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
         """
     )
     conn.commit()
@@ -513,3 +524,89 @@ def update_settings(values: dict[str, str]) -> dict[str, str]:
             )
         _connect().commit()
     return get_settings()
+
+
+# --------------------------------------------------------------------------- lessons (Reflexion 自我反思经验库)
+
+
+def add_lesson(trigger: str, lesson: str, scope: str = "all", outcome: str = "") -> dict[str, Any]:
+    """Persist a generalized lesson learned from a finished conversation.
+
+    De-dups against an identical existing (scope, lesson): instead of inserting a
+    near-duplicate it just reinforces the prior one (weight + hits ↑). This keeps
+    the library from blowing up and lets repeatedly-confirmed lessons rise to the
+    top — the 'reinforcement' in this verbal-RL loop."""
+    trigger = (trigger or "").strip()
+    lesson = (lesson or "").strip()
+    scope = scope if scope in ("b2b", "b2c", "all") else "all"
+    if not lesson:
+        raise ValueError("empty lesson")
+    ts = _now()
+    with _lock:
+        conn = _connect()
+        existing = conn.execute(
+            "SELECT id, weight, hits FROM lessons WHERE scope=? AND lesson=?", (scope, lesson)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE lessons SET weight=?, hits=?, outcome=?, updated_at=? WHERE id=?",
+                (float(existing["weight"]) + 1.0, int(existing["hits"]) + 1, outcome or "", ts, existing["id"]),
+            )
+            conn.commit()
+            lid = existing["id"]
+        else:
+            lid = _uid("lsn")
+            conn.execute(
+                "INSERT INTO lessons (id,scope,trigger,lesson,outcome,weight,hits,created_at,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (lid, scope, trigger, lesson, outcome or "", 1.0, 1, ts, ts),
+            )
+            conn.commit()
+    return get_lesson(lid)  # type: ignore[return-value]
+
+
+def get_lesson(lid: str) -> dict[str, Any] | None:
+    with _lock:
+        row = _connect().execute("SELECT * FROM lessons WHERE id=?", (lid,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_lessons(scope: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    q = "SELECT * FROM lessons"
+    params: tuple[Any, ...] = ()
+    if scope in ("b2b", "b2c", "all"):
+        q += " WHERE scope=? OR scope='all'"
+        params = (scope,)
+    q += " ORDER BY weight DESC, hits DESC, updated_at DESC LIMIT ?"
+    params = params + (int(limit),)
+    with _lock:
+        rows = _connect().execute(q, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def lessons_block(customer_type: str = "all", k: int = 8) -> str:
+    """Render the top learned lessons relevant to this customer type as prompt
+    context, so the closer applies hard-won experience on every turn."""
+    ctype = "b2c" if str(customer_type).lower() == "b2c" else "b2b"
+    rows = list_lessons(scope=ctype, limit=k)
+    if not rows:
+        return ""
+    out = []
+    for r in rows:
+        trig = f"[{r['trigger']}] " if r["trigger"] else ""
+        out.append(f"- {trig}{r['lesson']}")
+    return "\n".join(out)
+
+
+def prune_lessons(max_keep: int = 200) -> int:
+    """Drop the lowest-weight lessons beyond max_keep. Returns rows removed."""
+    with _lock:
+        conn = _connect()
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM lessons ORDER BY weight DESC, hits DESC, updated_at DESC LIMIT -1 OFFSET ?",
+            (int(max_keep),),
+        ).fetchall()]
+        for lid in ids:
+            conn.execute("DELETE FROM lessons WHERE id=?", (lid,))
+        conn.commit()
+    return len(ids)

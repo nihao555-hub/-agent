@@ -61,12 +61,21 @@ def _fallback(persona_key: str) -> str:
     }.get(persona_key, "嗯，你先说说这个具体怎么用、多少钱？")
 
 
-def next_message(customer_id: str, persona_key: str) -> dict[str, Any]:
-    """Generate the customer's next message, in character."""
+def next_message(customer_id: str, persona_key: str,
+                 persona_override: dict[str, str] | None = None) -> dict[str, Any]:
+    """Generate the customer's next message, in character.
+
+    ``persona_override`` (``{"label","seed"}``) lets the harness drive a freshly
+    *generated* hidden persona that isn't in the fixed PERSONAS dict — needed for
+    the anti-overfit 'new buyer every run' mode so the closer can't memorize a
+    small fixed cast."""
     customer = store.get_customer(customer_id)
     if customer is None:
         raise ValueError("customer not found")
-    persona = PERSONAS.get(persona_key, PERSONAS["skeptic"])
+    if persona_override and persona_override.get("seed"):
+        persona = {"label": persona_override.get("label", "（保密人设）"), "seed": persona_override["seed"]}
+    else:
+        persona = PERSONAS.get(persona_key, PERSONAS["skeptic"])
 
     if not llm.llm_available():
         return {"text": _fallback(persona_key), "persona": persona["label"]}

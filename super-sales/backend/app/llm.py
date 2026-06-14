@@ -60,9 +60,13 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise ValueError("no JSON object found in model reply")
 
 
-def chat_json(system: str, user: str, *, temperature: float = 0.4) -> dict[str, Any]:
-    """Ask the model for a JSON object, retrying once with a repair prompt."""
+def chat_json(system: str, user: str, *, temperature: float = 0.4, model: str | None = None) -> dict[str, Any]:
+    """Ask the model for a JSON object, retrying once with a repair prompt.
+
+    ``model`` lets callers route to a *different* model than the default (used by
+    the calibration judge to de-correlate from the closer model — anti-overfit)."""
     client = _get_client()
+    use_model = (model or _MODEL).strip()
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -70,7 +74,7 @@ def chat_json(system: str, user: str, *, temperature: float = 0.4) -> dict[str, 
     last_err: Exception | None = None
     for attempt in range(2):
         resp = client.chat.completions.create(
-            model=_MODEL,
+            model=use_model,
             messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
         )
