@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import statistics
 import tempfile
 import time
@@ -67,24 +68,39 @@ SCENARIOS: list[dict[str, Any]] = [
     },
 ]
 
-# country/language variety so the closer's language-mirroring gets exercised.
-LOCALES = [
-    ("United States", "English"),
-    ("Germany", "German"),
-    ("Saudi Arabia", "Arabic"),
-    ("Japan", "Japanese"),
-    ("Brazil", "Portuguese"),
-    ("China", "Chinese"),
+# Realistic buyer identities per country: a real person at a real-sounding company
+# (B2B) or a real consumer (B2C). The closer only ever sees this *legitimate lead
+# info* (name / country / role·company) — NEVER the hidden persona/emotion below.
+B2B_IDENTITIES: list[dict[str, str]] = [
+    {"name": "Daniel Brooks", "country": "United States", "org": "Northwind Retail（中型跨境电商）", "role": "客服总监"},
+    {"name": "Lukas Weber", "country": "Germany", "org": "BergMart GmbH（线上零售）", "role": "客户服务负责人"},
+    {"name": "Khalid Al-Mansoori", "country": "Saudi Arabia", "org": "Najd Commerce（零售集团）", "role": "运营 COO"},
+    {"name": "Sho Tanaka", "country": "Japan", "org": "Sakura Mart（EC 事业部）", "role": "CS マネージャー"},
+    {"name": "Bruno Almeida", "country": "Brazil", "org": "LojaPrime（电商）", "role": "Gerente de Atendimento"},
+    {"name": "李伟", "country": "China", "org": "云仓优选（电商）", "role": "客服中心主管"},
+]
+B2C_IDENTITIES: list[dict[str, str]] = [
+    {"name": "Mike Johnson", "country": "United States", "org": "", "role": "露营/房车爱好者"},
+    {"name": "Anna Schmidt", "country": "Germany", "org": "", "role": "户外旅行玩家"},
+    {"name": "Faisal Al-Harbi", "country": "Saudi Arabia", "org": "", "role": "沙漠自驾/应急备电用户"},
+    {"name": "Yuki Sato", "country": "Japan", "org": "", "role": "防灾备电家庭用户"},
+    {"name": "Carlos Souza", "country": "Brazil", "org": "", "role": "周末露营爱好者"},
+    {"name": "张磊", "country": "China", "org": "", "role": "自驾露营用户"},
 ]
 
 
-def _run_conversation(scenario: dict[str, Any], persona_key: str, locale: tuple[str, str], turns: int) -> dict[str, Any]:
-    country, _lang = locale
+def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict[str, str], turns: int) -> dict[str, Any]:
+    # The closer sees only legitimate lead info. The persona (emotion/temperament)
+    # is passed ONLY to the customer simulator → our AI stays fully black-box.
+    if scenario["customer_type"] == "b2b" and identity.get("org"):
+        category = f"{scenario['category']}｜{identity['org']}·{identity['role']}"
+    else:
+        category = f"{scenario['category']}｜{identity['role']}"
     cust = store.create_customer(
-        name=f"{persona_key}@{country}",
+        name=identity["name"],
         platform="sandbox",
-        country=country,
-        category=scenario["category"],
+        country=identity["country"],
+        category=category,
         customer_type=scenario["customer_type"],
     )
     cid = cust["id"]
@@ -101,8 +117,9 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, locale: tuple[
             break
     return {
         "customer_id": cid,
-        "persona": persona_key,
-        "country": country,
+        "hidden_persona": persona_key,  # what the buyer secretly was; closer never saw it
+        "buyer": f"{identity['name']}（{identity.get('org') or identity['role']}）",
+        "country": identity["country"],
         "scenario": scenario["product"]["name"],
         "handoff": handoff,
         "final_stage": final_stage,
@@ -141,37 +158,41 @@ def _judge(convo: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rounds", type=int, default=1, help="每个 persona×locale 组合跑几轮")
+    ap.add_argument("--rounds", type=int, default=1, help="每个 买家×场景 组合跑几轮（人设每轮随机、对我方保密）")
     ap.add_argument("--turns", type=int, default=6, help="每段对话最多多少来回")
     ap.add_argument("--personas", default="haggler,skeptic,aloof_dm,competitor,warm_indecisive",
-                    help="逗号分隔的 persona key")
-    ap.add_argument("--locales", type=int, default=3, help="使用前 N 个国家/语言组合")
+                    help="可被随机抽到的隐藏人设池（逗号分隔），我方 AI 不可见")
+    ap.add_argument("--buyers", type=int, default=3, help="每个场景使用前 N 个买家身份")
+    ap.add_argument("--seed", type=int, default=0, help="随机种子（固定可复现）")
     ap.add_argument("--out", default="calib_report.json")
     args = ap.parse_args()
+    rng = random.Random(args.seed or None)
 
     for sc in SCENARIOS:
         p = sc["product"]
         store.create_product(p["name"], p["summary"], p["details"], p["price_info"],
                               p["price_min"], p["price_max"], p["currency"])
 
-    persona_keys = [k.strip() for k in args.personas.split(",") if k.strip()]
-    locales = LOCALES[: max(1, args.locales)]
+    persona_pool = [k.strip() for k in args.personas.split(",") if k.strip()]
     print(f"LLM available: {llm.llm_available()} | model: {llm.model_name()}")
-    print(f"scenarios={len(SCENARIOS)} personas={persona_keys} locales={[loc[0] for loc in locales]} "
+    print(f"黑盒校准：隐藏人设池={persona_pool}（我方 AI 不可见）| buyers/场景={args.buyers} "
           f"rounds={args.rounds} turns={args.turns}\n")
 
     convos: list[dict[str, Any]] = []
     for sc in SCENARIOS:
-        for pk in persona_keys:
-            for loc in locales:
-                for _ in range(args.rounds):
-                    convo = _run_conversation(sc, pk, loc, args.turns)
-                    convo["judge"] = _judge(convo)
-                    convos.append(convo)
-                    s = convo["judge"]["scores"]
-                    avg = round(statistics.mean(s.values()), 1) if s else 0
-                    print(f"  [{convo['scenario'][:14]:<14}] {pk:<16} {loc[0]:<13} "
-                          f"avg={avg:<4} handoff={convo['handoff']} stage={convo['final_stage']}")
+        pool = (B2B_IDENTITIES if sc["customer_type"] == "b2b" else B2C_IDENTITIES)[: max(1, args.buyers)]
+        for identity in pool:
+            for _ in range(args.rounds):
+                # hidden persona is drawn at random and given ONLY to the buyer sim.
+                pk = rng.choice(persona_pool)
+                convo = _run_conversation(sc, pk, identity, args.turns)
+                convo["judge"] = _judge(convo)
+                convos.append(convo)
+                s = convo["judge"]["scores"]
+                avg = round(statistics.mean(s.values()), 1) if s else 0
+                print(f"  [{convo['scenario'][:14]:<14}] {identity['name']:<16} {identity['country']:<13} "
+                      f"avg={avg:<4} handoff={convo['handoff']} stage={convo['final_stage']} "
+                      f"(隐藏人设={pk})")
 
     # aggregate
     per_dim: dict[str, list[int]] = {d: [] for d in _JUDGE_DIMS}

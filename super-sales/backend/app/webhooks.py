@@ -7,13 +7,13 @@ the reply back through the same channel — so a conversation can run multi-turn
 on a real platform until a payment/contract red-line trips a human handoff.
 
 Supported now:
-  * WhatsApp Cloud API (Meta) — GET verify challenge + signed POST receive.
+  * WhatsApp via a 3rd-party gateway (Evolution API) — parses ``messages.upsert``
+    webhook events posted by the gateway.
   * Telegram Bot API — POST update.
 
 Security:
-  * WhatsApp POST bodies are verified against ``WHATSAPP_APP_SECRET`` via the
-    ``X-Hub-Signature-256`` HMAC header when the secret is configured.
-  * The GET verify handshake checks ``WHATSAPP_VERIFY_TOKEN``.
+  * If ``WA_GATEWAY_WEBHOOK_TOKEN`` is set, inbound WhatsApp posts must carry a
+    matching ``apikey`` header; otherwise (dev) we don't block.
 
 Everything is credential-gated: with no env configured the handlers simply
 report "not configured" rather than doing anything.
@@ -21,8 +21,6 @@ report "not configured" rather than doing anything.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
 from typing import Any
 
@@ -61,42 +59,51 @@ def _ingest(platform: str, external_id: str, text: str, name: str = "") -> dict[
     }
 
 
-# ───────────────────────────── WhatsApp Cloud API ─────────────────────────────
+# ──────────────────────── WhatsApp via Evolution API gateway ────────────────────────
 
 
-def whatsapp_verify(mode: str, token: str, challenge: str) -> tuple[int, str]:
-    """Meta webhook verification handshake (GET). Returns (status, body)."""
-    expected = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
-    if mode == "subscribe" and expected and token == expected:
-        return 200, challenge
-    return 403, "forbidden"
+def whatsapp_token_ok(apikey_header: str) -> bool:
+    """Optional shared-secret check on inbound gateway posts."""
+    expected = os.getenv("WA_GATEWAY_WEBHOOK_TOKEN", "")
+    return True if not expected else apikey_header == expected
 
 
-def whatsapp_signature_ok(raw_body: bytes, signature_header: str) -> bool:
-    """Validate X-Hub-Signature-256. If no app secret is configured we don't
-    block delivery (dev/sandbox), but when it IS set the signature must match."""
-    secret = os.getenv("WHATSAPP_APP_SECRET", "")
-    if not secret:
-        return True
-    if not signature_header.startswith("sha256="):
-        return False
-    digest = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, signature_header.split("=", 1)[1])
+def _evolution_text(message: dict[str, Any]) -> str:
+    """Pull plain text out of a Baileys/Evolution message object."""
+    if not isinstance(message, dict):
+        return ""
+    if message.get("conversation"):
+        return str(message["conversation"])
+    ext = message.get("extendedTextMessage")
+    if isinstance(ext, dict) and ext.get("text"):
+        return str(ext["text"])
+    return ""
 
 
 def handle_whatsapp(body: dict[str, Any]) -> dict[str, Any]:
-    """Parse a WhatsApp Cloud API inbound payload and route each text message."""
+    """Parse an Evolution API ``messages.upsert`` event and route inbound texts.
+
+    Tolerates both single-event ({"data": {...}}) and batched ({"data": [...]})
+    shapes. Skips our own outbound echoes (``key.fromMe``)."""
+    if body.get("event") and body.get("event") != "messages.upsert":
+        return {"ok": True, "handled": 0}
+    data = body.get("data", [])
+    items = data if isinstance(data, list) else [data]
     results: list[dict[str, Any]] = []
-    for entry in body.get("entry", []):
-        for change in entry.get("changes", []):
-            value = change.get("value", {})
-            contacts = {c.get("wa_id"): c.get("profile", {}).get("name", "") for c in value.get("contacts", [])}
-            for msg in value.get("messages", []):
-                if msg.get("type") != "text":
-                    continue
-                wa_id = msg.get("from", "")
-                text = msg.get("text", {}).get("body", "")
-                results.append(_ingest("whatsapp", wa_id, text, contacts.get(wa_id, "")))
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key", {})
+        if key.get("fromMe"):
+            continue
+        jid = str(key.get("remoteJid", ""))
+        number = jid.split("@", 1)[0]
+        if not number or "@g.us" in jid:  # skip groups
+            continue
+        text = _evolution_text(item.get("message", {}))
+        if not text:
+            continue
+        results.append(_ingest("whatsapp", number, text, item.get("pushName", "")))
     return {"ok": True, "handled": len(results), "results": results}
 
 

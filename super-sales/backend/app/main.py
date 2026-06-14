@@ -216,20 +216,16 @@ def get_channels() -> dict[str, object]:
 
 
 @app.get("/api/webhooks/whatsapp")
-def whatsapp_verify(request: Request) -> PlainTextResponse:
-    """Meta WhatsApp Cloud API webhook verification handshake."""
-    q = request.query_params
-    status, body = webhooks.whatsapp_verify(
-        q.get("hub.mode", ""), q.get("hub.verify_token", ""), q.get("hub.challenge", "")
-    )
-    return PlainTextResponse(body, status_code=status)
+def whatsapp_health() -> PlainTextResponse:
+    """Health probe — point the Evolution API gateway's webhook at the POST below."""
+    return PlainTextResponse("ok")
 
 
 @app.post("/api/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> dict[str, object]:
+    if not webhooks.whatsapp_token_ok(request.headers.get("apikey", "")):
+        return {"ok": False, "error": "bad token"}
     raw = await request.body()
-    if not webhooks.whatsapp_signature_ok(raw, request.headers.get("x-hub-signature-256", "")):
-        return {"ok": False, "error": "bad signature"}
     return webhooks.handle_whatsapp(json.loads(raw or b"{}"))
 
 

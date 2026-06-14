@@ -8,14 +8,15 @@ API, LINE Messaging API, WeCom) plug into the same interface once the user
 provides credentials via environment variables.
 
 Configuration is read from env so nothing secret is committed:
-  * WhatsApp : WHATSAPP_TOKEN, WHATSAPP_PHONE_ID   (optional WHATSAPP_API_BASE)
+  * Telegram : TELEGRAM_BOT_TOKEN                   (optional TELEGRAM_API_BASE)
+  * WhatsApp : via a self-hosted 3rd-party gateway (Evolution API, Baileys-based —
+               github.com/EvolutionAPI/evolution-api). Scan a QR with a normal
+               WhatsApp account, no Meta business account needed.
+               WA_GATEWAY_BASE, WA_GATEWAY_API_KEY, WA_GATEWAY_INSTANCE
   * LINE     : LINE_CHANNEL_TOKEN                   (optional LINE_API_BASE)
   * WeCom    : WECOM_CORP_ID, WECOM_SECRET, WECOM_AGENT_ID (optional WECOM_API_BASE)
 
-Each real platform's ``send`` is fully implemented against the official HTTP API,
-and the ``*_API_BASE`` overrides let you point the same adapter at a compliant
-third-party gateway without code changes. Delivery is gated purely on whether the
-credentials are present.
+Delivery is gated purely on whether the credentials are present.
 """
 
 from __future__ import annotations
@@ -108,27 +109,29 @@ class TelegramChannel(_EnvChannel):
 
 
 class WhatsAppChannel(_EnvChannel):
+    """WhatsApp via a self-hosted 3rd-party gateway (Evolution API / Baileys).
+
+    No Meta business account: you run the open-source gateway, scan a QR with a
+    normal WhatsApp number, and we talk to its REST API. ``to`` is the recipient
+    phone number in international format (digits only)."""
+
     name = "whatsapp"
-    label = "WhatsApp（Meta Cloud API）"
-    risk = "official"
-    required_env = ("WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID")
+    label = "WhatsApp（第三方网关 Evolution API）"
+    risk = "unofficial"
+    required_env = ("WA_GATEWAY_BASE", "WA_GATEWAY_API_KEY", "WA_GATEWAY_INSTANCE")
 
     def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
         if not self.is_configured():
             return super().send(to, messages, asset_id)
         import requests
 
-        base = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com/v20.0").rstrip("/")
-        url = f"{base}/{os.environ['WHATSAPP_PHONE_ID']}/messages"
-        headers = {"Authorization": f"Bearer {os.environ['WHATSAPP_TOKEN']}"}
+        base = os.environ["WA_GATEWAY_BASE"].rstrip("/")
+        instance = os.environ["WA_GATEWAY_INSTANCE"]
+        url = f"{base}/message/sendText/{instance}"
+        headers = {"apikey": os.environ["WA_GATEWAY_API_KEY"]}
         delivered = 0
         for msg in messages:
-            r = requests.post(
-                url,
-                headers=headers,
-                json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": msg}},
-                timeout=15,
-            )
+            r = requests.post(url, headers=headers, json={"number": to, "text": msg}, timeout=20)
             if r.ok:
                 delivered += 1
             else:
