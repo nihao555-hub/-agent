@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import llm
+from . import channels, closer, llm, store
 from .graph import NODE_OUTPUT_FIELD, PIPELINE, build_graph
 from .retrieval import retrieval_backend
 from .state import SalesState
@@ -61,6 +61,8 @@ def health() -> dict[str, object]:
         "model": llm.model_name() if llm.llm_available() else None,
         "retrieval_backend": retrieval_backend(),
         "pipeline": [{"key": k, "label": v} for k, v in PIPELINE],
+        "channels": channels.list_channels(),
+        "live_closer": True,
     }
 
 
@@ -153,3 +155,119 @@ async def run_stream(req: RunRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ====================================================================== 实时成交闭环
+# Live AI-closer: durable per-customer conversations across channels.
+
+
+class CustomerCreate(BaseModel):
+    name: str
+    platform: str = "sandbox"
+    country: str = ""
+    category: str = ""
+
+
+class InboundMessage(BaseModel):
+    text: str = Field(..., description="客户发来的消息")
+    auto_send: bool = Field(True, description="是否自动把 AI 生成的回复发出去")
+
+
+class ManualMessage(BaseModel):
+    text: str
+
+
+class ProductCreate(BaseModel):
+    name: str
+    summary: str = ""
+    details: str = ""
+    price_info: str = ""
+
+
+class AssetCreate(BaseModel):
+    product_id: str
+    kind: str = "image"
+    filename: str
+    caption: str = ""
+    shareable: bool = True
+
+
+class SettingsUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@app.get("/api/channels")
+def get_channels() -> dict[str, object]:
+    return {"channels": channels.list_channels()}
+
+
+@app.get("/api/settings")
+def read_settings() -> dict[str, str]:
+    return store.get_settings()
+
+
+@app.post("/api/settings")
+def write_settings(req: SettingsUpdate) -> dict[str, str]:
+    return store.update_settings(req.values)
+
+
+@app.get("/api/customers")
+def get_customers() -> dict[str, object]:
+    return {"customers": store.list_customers()}
+
+
+@app.post("/api/customers")
+def post_customer(req: CustomerCreate) -> dict[str, object]:
+    return store.create_customer(req.name, req.platform, req.country, req.category)
+
+
+@app.get("/api/customers/{cid}")
+def get_customer_detail(cid: str) -> dict[str, object]:
+    customer = store.get_customer(cid)
+    if customer is None:
+        return {"error": "customer not found"}
+    return {
+        "customer": customer,
+        "messages": store.list_messages(cid),
+        "memory": store.list_memory(cid),
+    }
+
+
+@app.post("/api/customers/{cid}/inbound")
+def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
+    if store.get_customer(cid) is None:
+        return {"error": "customer not found"}
+    store.add_message(cid, "customer", req.text)
+    decision = closer.decide(cid, req.text)
+    sent: list[dict[str, object]] = []
+    if req.auto_send:
+        sent = closer.apply_decision(cid, decision)
+    decision.pop("evidence", None)
+    return {
+        "decision": decision,
+        "sent": sent,
+        "customer": store.get_customer(cid),
+        "memory": store.list_memory(cid),
+    }
+
+
+@app.post("/api/customers/{cid}/send")
+def post_send(cid: str, req: ManualMessage) -> dict[str, object]:
+    if store.get_customer(cid) is None:
+        return {"error": "customer not found"}
+    return store.add_message(cid, "agent", req.text)
+
+
+@app.get("/api/products")
+def get_products() -> dict[str, object]:
+    return {"products": store.list_products()}
+
+
+@app.post("/api/products")
+def post_product(req: ProductCreate) -> dict[str, object]:
+    return store.create_product(req.name, req.summary, req.details, req.price_info)
+
+
+@app.post("/api/assets")
+def post_asset(req: AssetCreate) -> dict[str, object]:
+    return store.add_asset(req.product_id, req.kind, req.filename, req.caption, req.shareable)

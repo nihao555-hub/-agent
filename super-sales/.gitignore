@@ -4,6 +4,12 @@ __pycache__/
 *.pyc
 .env
 
+# local durable store (SQLite)
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
 # node
 web/node_modules/
 web/dist/
