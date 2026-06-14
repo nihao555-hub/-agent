@@ -103,3 +103,11 @@ export const IconClock = (p: P) => (
     <path d="M12 8v4l3 2" />
   </svg>
 );
+
+export const IconTrophy = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 4h10v4a5 5 0 0 1-10 0z" />
+    <path d="M7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3" />
+    <path d="M9 20h6M12 13v7" />
+  </svg>
+);

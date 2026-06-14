@@ -92,7 +92,7 @@ export default function App() {
               <div>
                 <h1 className="font-serif text-[26px] tracking-[-0.02em] text-ink">私域跟单工作台</h1>
                 <p className="mt-1 text-[13.5px] text-muted">
-                  贴一段客户的微信聊天，让 9 个销售智能体接管这一单。
+                  贴一段客户的微信聊天，让 10 个销售智能体接管这一单。
                 </p>
               </div>
               {health && (

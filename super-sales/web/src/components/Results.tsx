@@ -10,6 +10,7 @@ import {
   IconRoute,
   IconTag,
   IconTarget,
+  IconTrophy,
   IconUser,
 } from "../icons";
 
@@ -34,8 +35,8 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export default function Results({ state }: { state: FinalState }) {
-  const { profile, stage, objections, recovery, script, quote, followup, crm, evidence } = state;
-  const hasAny = profile || stage || objections || recovery || script || quote || followup || crm;
+  const { profile, stage, objections, recovery, script, quote, followup, crm, coach, evidence } = state;
+  const hasAny = profile || stage || objections || recovery || script || quote || followup || crm || coach;
 
   if (!hasAny) {
     return (
@@ -45,7 +46,7 @@ export default function Results({ state }: { state: FinalState }) {
         </span>
         <p className="font-serif text-[18px] text-ink">贴一段客户聊天，让 AI 接管跟单</p>
         <p className="mt-1 max-w-sm text-[13px] text-muted">
-          9 个销售智能体会依次判断阶段、拆解异议、生成话术与报价，并把每条结论溯源到销售方法论。
+          10 个销售智能体会依次判断阶段、拆解异议、生成话术与报价，并给出赢率评分，把每条结论溯源到销售方法论。
         </p>
       </div>
     );
@@ -294,6 +295,78 @@ export default function Results({ state }: { state: FinalState }) {
           </Card>
         )}
       </div>
+
+      {/* 赢率评分 + 复盘教练 */}
+      {coach && (
+        <Card
+          title="赢率评分与复盘"
+          icon={<IconTrophy />}
+          meta={
+            <Badge tone={coach.win_score >= 67 ? "green" : coach.win_score >= 34 ? "yellow" : "red"}>
+              {coach.win_score >= 67 ? "高赢面" : coach.win_score >= 34 ? "中等赢面" : "低赢面"}
+            </Badge>
+          }
+          className="fade-in border-charcoal/20"
+        >
+          <div className="flex items-center gap-4">
+            <div className="shrink-0">
+              <div className="font-serif text-[40px] leading-none text-ink">{coach.win_score}</div>
+              <div className="mt-1 text-[11px] uppercase tracking-[0.05em] text-muted">赢率分 / 100</div>
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              {coach.factors?.map((f, i) => (
+                <div key={i}>
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="text-charcoal">{f.name}</span>
+                    <span className="font-mono text-muted">{f.score}</span>
+                  </div>
+                  <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-bone">
+                    <div
+                      className={`h-full rounded-full ${
+                        f.score >= 67 ? "bg-pale-green-ink" : f.score >= 34 ? "bg-pale-yellow-ink" : "bg-pale-red-ink"
+                      }`}
+                      style={{ width: `${Math.max(0, Math.min(100, f.score))}%` }}
+                    />
+                  </div>
+                  {f.comment && <p className="mt-0.5 text-[11.5px] leading-5 text-muted">{f.comment}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+          {coach.key_risks?.length ? (
+            <div className="mt-4">
+              <span className="text-[11px] uppercase tracking-[0.05em] text-muted">丢单风险</span>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {coach.key_risks.map((r, i) => (
+                  <Badge key={i} tone="red">
+                    {r}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {coach.improvement_actions?.length ? (
+            <div className="mt-4">
+              <span className="text-[11px] uppercase tracking-[0.05em] text-muted">新手 → 销冠：下一步怎么做更好</span>
+              <ul className="mt-1.5 space-y-1.5">
+                {coach.improvement_actions.map((a, i) => (
+                  <li key={i} className="flex gap-2 text-[13px] leading-6 text-charcoal">
+                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-charcoal" />
+                    {a}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {coach.coaching_tip && (
+            <div className="mt-4 rounded-lg border border-line bg-pale-green/30 p-3.5">
+              <span className="text-[11px] uppercase tracking-[0.05em] text-pale-green-ink">销冠心法</span>
+              <p className="mt-1 text-[13.5px] leading-6 text-ink">{coach.coaching_tip}</p>
+            </div>
+          )}
+          <Cite ids={coach.cited} />
+        </Card>
+      )}
 
       {/* 检索依据 */}
       {evidence?.length ? (

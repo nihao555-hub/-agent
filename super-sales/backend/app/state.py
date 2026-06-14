@@ -31,6 +31,7 @@ class SalesState(TypedDict, total=False):
     quote: dict[str, Any]  # 报价官
     followup: dict[str, Any]  # 跟进策略官
     crm: dict[str, Any]  # CRM 建档官
+    coach: dict[str, Any]  # 赢率评分/复盘官
 
     # --- routing / bookkeeping ---
     churn_risk: str  # low | medium | high  (drives the conditional branch)

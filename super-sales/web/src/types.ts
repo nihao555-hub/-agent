@@ -98,6 +98,21 @@ export interface Crm {
   tags: string[];
 }
 
+export interface CoachFactor {
+  name: string;
+  score: number;
+  comment: string;
+}
+
+export interface Coach {
+  win_score: number;
+  factors: CoachFactor[];
+  key_risks: string[];
+  improvement_actions: string[];
+  coaching_tip: string;
+  cited: string[];
+}
+
 export interface FinalState {
   evidence?: Evidence[];
   profile?: Profile;
@@ -108,6 +123,7 @@ export interface FinalState {
   quote?: Quote;
   followup?: Followup;
   crm?: Crm;
+  coach?: Coach;
   engine?: Engine;
   churn_risk?: string;
 }

@@ -25,6 +25,7 @@ PIPELINE: list[tuple[str, str]] = [
     ("quote", "报价官"),
     ("followup", "跟进策略官"),
     ("crm", "CRM 建档官"),
+    ("coach", "赢率评分/复盘官"),
 ]
 
 
@@ -45,6 +46,7 @@ def build_graph():
     g.add_node("quote", nodes.quote_node)
     g.add_node("followup", nodes.followup_node)
     g.add_node("crm", nodes.crm_node)
+    g.add_node("coach", nodes.coach_node)
 
     g.set_entry_point("retrieve")
     g.add_edge("retrieve", "profile")
@@ -62,7 +64,8 @@ def build_graph():
     g.add_edge("script", "quote")
     g.add_edge("quote", "followup")
     g.add_edge("followup", "crm")
-    g.add_edge("crm", END)
+    g.add_edge("crm", "coach")
+    g.add_edge("coach", END)
 
     return g.compile()
 
@@ -79,4 +82,5 @@ NODE_OUTPUT_FIELD: dict[str, str] = {
     "quote": "quote",
     "followup": "followup",
     "crm": "crm",
+    "coach": "coach",
 }

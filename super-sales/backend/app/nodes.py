@@ -46,7 +46,7 @@ def retrieve_node(state: SalesState) -> dict[str, Any]:
     convo = state.get("conversation", "")
     product = state.get("product", "")
     query = f"{product}\n{convo}".strip()
-    evidence = retrieve(query, k=4)
+    evidence = retrieve(query, k=6)
     return {
         "evidence": evidence,
         "meta": {"retrieval_backend": retrieval_backend()},
@@ -268,3 +268,51 @@ def crm_node(state: SalesState) -> dict[str, Any]:
     user = f"客户画像：{profile}\n阶段判断：{stage}"
     result, _ = _safe_llm(system, user, fallback)
     return {"crm": result, "engine": _engine()}
+
+
+# ----------------------------------------------------------------------------- 10. 赢率评分/复盘官
+
+
+def coach_node(state: SalesState) -> dict[str, Any]:
+    """Scores the deal's win probability with a factor breakdown and coaches the
+    rep on how to play the next moves like a top performer (新手 → 销冠)."""
+    convo = state.get("conversation", "")
+    evidence = state.get("evidence", [])
+    profile = state.get("profile", {})
+    stage = state.get("stage", {})
+    objections = state.get("objections", {})
+    quote = state.get("quote", {})
+    fallback = {
+        "win_score": 45,
+        "factors": [
+            {"name": "需求强度", "score": 70, "comment": "对账痛点明确且被客户亲口承认。"},
+            {"name": "预算匹配", "score": 40, "comment": "价格敏感，价值未充分锚定。"},
+            {"name": "决策权", "score": 60, "comment": "疑似老板本人，但未确认采购流程。"},
+            {"name": "紧迫度", "score": 35, "comment": "已读未回，缺少明确的下一步时间。"},
+            {"name": "竞争态势", "score": 50, "comment": "现用低价竞品作锚点，需做差异化。"},
+        ],
+        "key_risks": ["价值未量化即被压价", "无明确 next step，商机易冷掉"],
+        "improvement_actions": [
+            "用影响类提问把对账错误的年损失算成具体金额，再报价（SPIN）。",
+            "每次跟进都带新价值由头，并锁定一个二选一的下一步时间。",
+            "帮客户准备对上汇报的一页 ROI 摘要，养出内部 Champion。",
+        ],
+        "coaching_tip": "新手急着报价和降价，销冠先用 TCO 把『不解决的代价』讲到客户心里，"
+        "再用限时让步换签约——先价值、后价格、让步必换条件。",
+        "cited": ["METHOD-VALUE", "DISC-03", "FOLLOW-03"],
+    }
+    system = (
+        "你是『赢率评分/复盘官』，一位顶级销售教练。基于客户画像、阶段、异议、报价与方法论，"
+        "给这一单打一个赢率分并指出销售本可以做得更好的地方，帮助一个普通销售向销冠进化。"
+        "只输出 JSON，字段：win_score(0-100整数)、"
+        "factors(数组,每项含 name、score(0-100整数)、comment)、"
+        "key_risks(string数组,本单最大的丢单风险)、"
+        "improvement_actions(string数组,这名销售下一步应如何改进,要具体可执行)、"
+        "coaching_tip(一句点醒新手的销冠心法)、cited(引用片段ID数组)。"
+    )
+    user = (
+        f"客户画像：{profile}\n阶段：{stage}\n异议：{objections}\n报价：{quote}\n"
+        f"方法论片段：\n{_evidence_block(evidence)}\n\n聊天记录：\n{convo}"
+    )
+    result, _ = _safe_llm(system, user, fallback, temperature=0.5)
+    return {"coach": result, "engine": _engine()}

@@ -11,6 +11,7 @@ const AGENTS = [
   ["报价官", "三档套餐锚定，主推中间档"],
   ["跟进策略官", "排出带时间点的跟进计划"],
   ["CRM 建档官", "沉淀成交概率、标签与下一步动作"],
+  ["赢率评分/复盘官", "给这一单打赢率分，指出丢单风险与新手→销冠的改进点"],
 ];
 
 export default function About() {
@@ -32,7 +33,7 @@ export default function About() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card title="不是套壳" icon={<IconSpark />}>
           <p className="text-[13.5px] leading-6 text-charcoal">
-            9 个角色各司其职，结论都用方法论片段做溯源，而不是让大模型写一段话。
+            10 个角色各司其职，结论都用方法论片段做溯源，而不是让大模型写一段话。
           </p>
         </Card>
         <Card title="真 Agent 编排" icon={<IconRoute />}>
@@ -47,7 +48,7 @@ export default function About() {
         </Card>
       </div>
 
-      <h2 className="mb-3 mt-8 font-serif text-[20px] text-ink">九个销售智能体</h2>
+      <h2 className="mb-3 mt-8 font-serif text-[20px] text-ink">十个销售智能体</h2>
       <div className="overflow-hidden rounded-card border border-line">
         {AGENTS.map(([name, desc], i) => (
           <div
