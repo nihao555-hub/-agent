@@ -4,3 +4,5 @@ pydantic>=2.6
 openai>=1.30
 langgraph>=0.2.0
 fastembed>=0.3.0
+requests>=2.31          # RAGFlow retrieval backend + provisioning script
+pycryptodome>=3.20      # RSA login for scripts/ragflow_ingest.py

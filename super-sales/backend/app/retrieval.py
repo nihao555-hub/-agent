@@ -11,6 +11,7 @@ Both backends expose the same `search(query, k)` returning citable snippets.
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from functools import lru_cache
@@ -95,8 +96,69 @@ class _EmbeddingRetriever:
         return out
 
 
+class _RagflowRetriever:
+    """Multimodal RAG backend backed by a local RAGFlow deployment.
+
+    Used only when ``RAGFLOW_API_URL`` / ``RAGFLOW_API_KEY`` / ``RAGFLOW_DATASET_ID``
+    are configured *and* the retrieval endpoint answers a probe. RAGFlow lets the
+    knowledge base hold images / video / docs, not just text — so the same query
+    can surface multimodal assets. Any failure falls back to the local vector
+    retriever so the closer never blocks on RAGFlow being up.
+    """
+
+    def __init__(self, base_url: str, api_key: str, dataset_id: str):
+        import requests  # local import: only needed on this path
+
+        self._requests = requests
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.dataset_ids = [d.strip() for d in dataset_id.split(",") if d.strip()]
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+    def probe(self) -> bool:
+        try:
+            r = self._requests.get(
+                f"{self.base_url}/api/v1/datasets", headers=self._headers(), timeout=5
+            )
+            return r.status_code == 200
+        except Exception:  # noqa: BLE001
+            return False
+
+    def search(self, query: str, k: int) -> list[dict[str, Any]]:
+        try:
+            r = self._requests.post(
+                f"{self.base_url}/api/v1/retrieval",
+                headers=self._headers(),
+                json={
+                    "question": query,
+                    "dataset_ids": self.dataset_ids,
+                    "top_k": max(k * 4, 16),
+                    "page_size": k,
+                    "similarity_threshold": 0.1,
+                },
+                timeout=20,
+            )
+            chunks = (r.json().get("data") or {}).get("chunks") or []
+        except Exception:  # noqa: BLE001
+            return _fallback_retriever().search(query, k)
+        out: list[dict[str, Any]] = []
+        for c in chunks[:k]:
+            out.append(
+                {
+                    "id": c.get("id", ""),
+                    "title": c.get("document_keyword") or c.get("docnm_kwd") or "RAGFlow",
+                    "text": c.get("content") or c.get("content_with_weight") or "",
+                    "score": round(float(c.get("similarity", 0.0)), 4),
+                    "backend": "ragflow",
+                }
+            )
+        return out
+
+
 @lru_cache(maxsize=1)
-def _get_retriever() -> Any:
+def _fallback_retriever() -> Any:
     try:
         from fastembed import TextEmbedding  # type: ignore
 
@@ -104,6 +166,18 @@ def _get_retriever() -> Any:
         return _EmbeddingRetriever(PLAYBOOK, model)
     except Exception:  # noqa: BLE001 — any failure → deterministic fallback
         return _TfidfRetriever(PLAYBOOK)
+
+
+@lru_cache(maxsize=1)
+def _get_retriever() -> Any:
+    url = os.getenv("RAGFLOW_API_URL", "").strip()
+    key = os.getenv("RAGFLOW_API_KEY", "").strip()
+    dataset = os.getenv("RAGFLOW_DATASET_ID", "").strip()
+    if url and key and dataset:
+        rf = _RagflowRetriever(url, key, dataset)
+        if rf.probe():
+            return rf
+    return _fallback_retriever()
 
 
 def retrieve(query: str, k: int = 4) -> list[dict[str, Any]]:
@@ -115,4 +189,6 @@ def retrieve(query: str, k: int = 4) -> list[dict[str, Any]]:
 
 def retrieval_backend() -> str:
     r = _get_retriever()
+    if isinstance(r, _RagflowRetriever):
+        return "ragflow"
     return "embedding" if isinstance(r, _EmbeddingRetriever) else "tfidf"
