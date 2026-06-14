@@ -43,6 +43,7 @@ def _connect() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
         _init_schema(_conn)
+        _migrate(_conn)
     return _conn
 
 
@@ -69,6 +70,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             role TEXT NOT NULL,            -- customer | agent | system
             text TEXT NOT NULL,
             asset_id TEXT DEFAULT '',
+            translation TEXT DEFAULT '',   -- operator-facing translation (双语对照)
+            lang TEXT DEFAULT '',          -- detected/used language of `text`
             created_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS memory_facts (
@@ -101,6 +104,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first release, idempotently."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    for col in ("translation", "lang"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -168,17 +180,46 @@ def _customer_row(row: sqlite3.Row) -> dict[str, Any]:
 # --------------------------------------------------------------------------- messages
 
 
-def add_message(customer_id: str, role: str, text: str, asset_id: str = "") -> dict[str, Any]:
+def add_message(
+    customer_id: str,
+    role: str,
+    text: str,
+    asset_id: str = "",
+    translation: str = "",
+    lang: str = "",
+) -> dict[str, Any]:
     mid = _uid("msg")
     ts = _now()
     with _lock:
         _connect().execute(
-            "INSERT INTO messages (id,customer_id,role,text,asset_id,created_at) VALUES (?,?,?,?,?,?)",
-            (mid, customer_id, role, text, asset_id, ts),
+            "INSERT INTO messages (id,customer_id,role,text,asset_id,translation,lang,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (mid, customer_id, role, text, asset_id, translation, lang, ts),
         )
         _connect().execute("UPDATE customers SET updated_at=? WHERE id=?", (ts, customer_id))
         _connect().commit()
-    return {"id": mid, "customer_id": customer_id, "role": role, "text": text, "asset_id": asset_id, "created_at": ts}
+    return {
+        "id": mid,
+        "customer_id": customer_id,
+        "role": role,
+        "text": text,
+        "asset_id": asset_id,
+        "translation": translation,
+        "lang": lang,
+        "created_at": ts,
+    }
+
+
+def set_message_translation(message_id: str, translation: str, lang: str = "") -> None:
+    """Backfill the operator-facing translation onto an existing message."""
+    if not translation and not lang:
+        return
+    with _lock:
+        _connect().execute(
+            "UPDATE messages SET translation=?, lang=? WHERE id=?",
+            (translation, lang, message_id),
+        )
+        _connect().commit()
 
 
 def list_messages(customer_id: str, limit: int = 200) -> list[dict[str, Any]]:

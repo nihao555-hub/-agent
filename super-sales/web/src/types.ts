@@ -5,12 +5,22 @@ export interface PipelineStep {
   label: string;
 }
 
+export interface ChannelInfo {
+  name: string;
+  label: string;
+  risk: string;
+  configured: boolean;
+}
+
 export interface Health {
   ok: boolean;
   engine: Engine;
   model: string | null;
   retrieval_backend: string;
   pipeline: PipelineStep[];
+  channels?: ChannelInfo[];
+  live_closer?: boolean;
+  sales_stages?: string[];
 }
 
 export interface Evidence {
@@ -126,6 +136,74 @@ export interface FinalState {
   coach?: Coach;
   engine?: Engine;
   churn_risk?: string;
+}
+
+// ---- live AI-closer ----
+
+export interface Customer {
+  id: string;
+  name: string;
+  platform: string;
+  country: string;
+  category: string;
+  stage: string;
+  win_score: number;
+  status: string;
+  next_step: string;
+  tags: string[];
+  updated_at: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  customer_id: string;
+  role: "customer" | "agent" | "system";
+  text: string;
+  asset_id?: string;
+  translation?: string;
+  lang?: string;
+  created_at: number;
+}
+
+export interface MemoryFact {
+  id: string;
+  customer_id: string;
+  kind: string;
+  text: string;
+  created_at: number;
+}
+
+export interface CotStep {
+  role: string;
+  thought: string;
+}
+
+export interface MemoryDraft {
+  kind: string;
+  text: string;
+}
+
+export interface Move {
+  method: string;
+  move: string;
+}
+
+export interface Decision {
+  cot: CotStep[];
+  reply: string[];
+  reply_translation?: string[];
+  customer_lang?: string;
+  inbound_translation?: string;
+  moves?: Move[];
+  send_asset: string;
+  stage: string;
+  win_score: number;
+  next_step: string;
+  new_memory: MemoryDraft[];
+  handoff: boolean;
+  handoff_reason: string;
+  cited: string[];
+  engine?: Engine;
 }
 
 export type StepStatus = "pending" | "running" | "done" | "skipped";

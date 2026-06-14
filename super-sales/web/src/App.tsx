@@ -4,13 +4,14 @@ import PipelineRail from "./components/PipelineRail";
 import Results from "./components/Results";
 import Knowledge from "./components/Knowledge";
 import About from "./components/About";
+import ChatConsole from "./components/ChatConsole";
 import { getHealth, getSample, runStream } from "./api";
 import type { FinalState, Health, RunStep } from "./types";
 import { Badge } from "./ui";
 import { IconArrow, IconSpark } from "./icons";
 
 export default function App() {
-  const [view, setView] = useState<View>("workbench");
+  const [view, setView] = useState<View>("console");
   const [health, setHealth] = useState<Health | null>(null);
   const [conversation, setConversation] = useState("");
   const [product, setProduct] = useState("");
@@ -85,7 +86,14 @@ export default function App() {
     <div className="flex h-screen overflow-hidden bg-canvas">
       <Sidebar view={view} setView={setView} health={health} />
 
-      <main className="flex-1 overflow-y-auto">
+      <main className={`flex-1 ${view === "console" ? "overflow-hidden" : "overflow-y-auto"}`}>
+        {view === "console" && (
+          <ChatConsole
+            channels={health?.channels ?? []}
+            salesStages={health?.sales_stages ?? []}
+          />
+        )}
+
         {view === "workbench" && (
           <div className="mx-auto max-w-[1180px] px-8 py-7">
             <header className="mb-6 flex items-end justify-between">

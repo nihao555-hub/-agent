@@ -111,3 +111,29 @@ export const IconTrophy = (p: P) => (
     <path d="M9 20h6M12 13v7" />
   </svg>
 );
+
+export const IconSend = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 12l16-8-6 16-3-6z" />
+  </svg>
+);
+
+export const IconBrain = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8A2.5 2.5 0 0 0 7 18a2.5 2.5 0 0 0 2 1 2 2 0 0 0 2-2V5a1 1 0 0 0-2 0" />
+    <path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8A2.5 2.5 0 0 1 17 18a2.5 2.5 0 0 1-2 1 2 2 0 0 1-2-2" />
+  </svg>
+);
+
+export const IconPlus = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const IconShield = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" />
+    <path d="M9 12l2 2 4-4" />
+  </svg>
+);

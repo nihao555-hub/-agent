@@ -25,6 +25,27 @@ from typing import Any
 from . import llm, store
 from .retrieval import retrieve
 
+# Canonical sales pipeline — the right panel renders this as a live progress rail
+# so the operator can see exactly which step the deal has reached.
+STAGES: list[str] = ["认知", "兴趣", "需求", "方案", "报价", "谈判", "成交", "交接"]
+# Tolerate legacy / synonym labels the model may emit.
+_STAGE_SYNONYMS: dict[str, str] = {
+    "评估": "需求",
+    "演示": "方案",
+    "试用": "方案",
+    "成交收尾": "成交",
+    "已成交": "成交",
+    "人工": "交接",
+    "转人工": "交接",
+}
+
+
+def _norm_stage(stage: str) -> str:
+    stage = (stage or "").strip()
+    if stage in STAGES:
+        return stage
+    return _STAGE_SYNONYMS.get(stage, stage or "认知")
+
 # Country → methodology IDs to bias localization retrieval toward.
 _COUNTRY_HINTS: dict[str, str] = {
     "美国": "GLOBAL-01 北美 ROI 直接",
@@ -78,18 +99,26 @@ def _localization_query(customer: dict[str, Any], settings: dict[str, str]) -> s
 
 
 def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]:
+    reply = [
+        "收到～我先确认下你最在意的是价格、还是切换会不会麻烦？",
+        "你方便的话，我可以拿你的真实场景给你算一笔账，看到底值不值，今天下午还是明天上午合适？",
+    ]
     return {
         "cot": [
             {"role": "记忆官", "thought": "读取该客户历史与已知痛点/承诺，确认未重复发问。"},
             {"role": "线索情报官", "thought": "据画像判断当前阶段与决策角色，评估赢率。"},
-            {"role": "本地化官", "thought": "按客户国家/品类调整称呼、语气与行话。"},
+            {"role": "本地化官", "thought": "按客户国家/品类调整称呼、语气与行话，并与客户同语言作答。"},
             {"role": "策略官", "thought": "用 SPIN 影响类提问把痛点量化，避免直接报死价。"},
             {"role": "隐私红线官", "thought": "本条回复不涉及成本价/利润/客户隐私，放行。"},
             {"role": "拟人化官", "thought": "拆成两条短消息，口语化，结尾给一个二选一下一步。"},
         ],
-        "reply": [
-            "收到～我先确认下你最在意的是价格、还是切换会不会麻烦？",
-            "你方便的话，我可以拿你的真实场景给你算一笔账，看到底值不值，今天下午还是明天上午合适？",
+        "reply": reply,
+        "reply_translation": list(reply),
+        "customer_lang": "中文",
+        "inbound_translation": inbound,
+        "moves": [
+            {"method": "SPIN", "move": "用影响类提问把痛点量化"},
+            {"method": "二选一收尾", "move": "给出今天/明天的低门槛下一步"},
         ],
         "send_asset": "",
         "stage": customer.get("stage", "认知"),
@@ -156,18 +185,31 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
         system = (
             "你是一位顶级『AI 销冠』，正在私域/IM 里和客户实时一对一聊天直到成单。"
             "你要同时扮演记忆官、线索情报官、本地化官、策略官、隐私红线官、拟人化官，做一次完整决策。\n"
-            f"语气要求：{settings.get('tone', '')}；语言：{settings.get('language', '中文')}。\n"
+            "【语言·最重要】用客户自己的语言回复：自动识别客户最近消息的语言（英文就用英文、"
+            "日语用日语、西班牙语用西班牙语、阿拉伯语用阿拉伯语…）。绝不要默认中文。翻译要情景化、"
+            "本土化，用当地人真正的表达/俚语/行话，绝不生硬直译。\n"
+            f"语气要求：{settings.get('tone', '')}。\n"
+            "【拟人·别被看出是AI】像真人销售一样聊：禁用 AI 腔和八股套话（如“作为AI”“根据您的需求”"
+            "“很高兴为您服务”“以下是”）；句子有长有短、口语化、可带少量语气词与（符合当地习惯的）表情；"
+            "不堆砌专业术语、不一次说完所有点；有真人的节奏感。\n"
             f"身份披露策略：{disclosure}\n"
             "硬红线（隐私红线官，绝不能违反）：以下信息绝不外发给客户——"
             f"{settings.get('privacy_redlines', '')}。需要用到时只用对外版表述。\n"
+            "【决策护栏·避免灾难性后果】绝不替客户做重大决定，也不代表公司做不可逆承诺："
+            "不自行答应降价/折扣/特殊让步、不承诺交付期/退款/合同条款/变更需求、不代客户下单或选型。"
+            "遇到这类决策点：先理解需求并给出选项/说明，但把最终拍板交回给客户，并将 handoff 置为 true 转人工。\n"
             "只输出一个 JSON 对象，字段："
             "cot(数组，每项含 role 和 thought，依次给出 记忆官/线索情报官/本地化官/策略官/隐私红线官/拟人化官 的思考)、"
-            "reply(string数组，要发出去的消息，已按真人习惯拆成1-3条短消息、口语化、结尾带明确下一步)、"
+            "reply(string数组，要发出去的消息，【用客户的语言】，已按真人习惯拆成1-3条短消息、口语化、结尾带明确下一步)、"
+            "reply_translation(string数组，与 reply 一一对应的中文译文，供我方人员看懂；若 reply 本身就是中文则原文返回)、"
+            "customer_lang(客户语言名称，如 English/日本語/Espa\u00f1ol/中文)、"
+            "inbound_translation(客户最新消息的中文译文；若本是中文则原文返回)、"
+            "moves(数组，每项含 method[方法论名，如SPIN/Challenger/MEDDIC/Cialdini…] 和 move[本轮具体用了哪一招]，说明方法论用在了哪里)、"
             "send_asset(要附带发送的素材ID，没有则空字符串；只能选标记“可对外”的素材)、"
-            "stage(更新后的阶段：认知/兴趣/评估/谈判/成交)、win_score(0-100整数赢率)、"
+            f"stage(更新后的阶段，只能从这些中选：{'/'.join(STAGES)})、win_score(0-100整数赢率)、"
             "next_step(明确、低门槛、有时间点的下一步)、"
-            "new_memory(数组，每项含 kind[pain|preference|commitment|objection|taboo|fact] 和 text，本轮新获取需长期记住的信息)、"
-            "handoff(布尔，是否该转人工——涉及收款/合同/盖章或触红线时为true)、handoff_reason(字符串)、"
+            "new_memory(数组，每项含 kind[pain|preference|commitment|objection|taboo|fact] 和 text，本轮新获取需长期记住的信息，用中文记录)、"
+            "handoff(布尔，是否该转人工——涉及收款/合同/盖章/重大决定或触红线时为true)、handoff_reason(字符串)、"
             "cited(引用的方法论片段ID数组)。"
         )
         user = (
@@ -194,8 +236,19 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
     if isinstance(reply, str):
         reply = [reply]
     result["reply"] = [str(m) for m in reply if str(m).strip()]
+    trans = result.get("reply_translation") or []
+    if isinstance(trans, str):
+        trans = [trans]
+    trans = [str(t) for t in trans]
+    # pad/truncate so translations line up 1:1 with replies
+    while len(trans) < len(result["reply"]):
+        trans.append(result["reply"][len(trans)])
+    result["reply_translation"] = trans[: len(result["reply"])]
+    result.setdefault("customer_lang", "")
+    result.setdefault("inbound_translation", inbound)
+    result.setdefault("moves", [])
     result["send_asset"] = _validate_asset(result.get("send_asset", ""), products)
-    result.setdefault("stage", customer.get("stage", "认知"))
+    result["stage"] = _norm_stage(result.get("stage") or customer.get("stage", "认知"))
     result.setdefault("win_score", customer.get("win_score", 40))
     result.setdefault("next_step", "")
     result.setdefault("new_memory", [])
@@ -222,9 +275,13 @@ def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str,
     """Persist a decision: send agent messages, update state, store new memory."""
     sent: list[dict[str, Any]] = []
     asset_id = decision.get("send_asset", "")
-    for i, text in enumerate(decision.get("reply", [])):
-        aid = asset_id if i == len(decision["reply"]) - 1 else ""
-        sent.append(store.add_message(customer_id, "agent", text, asset_id=aid))
+    replies = decision.get("reply", [])
+    trans = decision.get("reply_translation", [])
+    lang = decision.get("customer_lang", "")
+    for i, text in enumerate(replies):
+        aid = asset_id if i == len(replies) - 1 else ""
+        tr = trans[i] if i < len(trans) else ""
+        sent.append(store.add_message(customer_id, "agent", text, asset_id=aid, translation=tr, lang=lang))
     for fact in decision.get("new_memory", []):
         if isinstance(fact, dict) and fact.get("text"):
             store.add_memory(customer_id, fact.get("kind", "fact"), str(fact["text"]))

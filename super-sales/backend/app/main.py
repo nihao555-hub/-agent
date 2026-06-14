@@ -63,6 +63,7 @@ def health() -> dict[str, object]:
         "pipeline": [{"key": k, "label": v} for k, v in PIPELINE],
         "channels": channels.list_channels(),
         "live_closer": True,
+        "sales_stages": closer.STAGES,
     }
 
 
@@ -237,8 +238,14 @@ def get_customer_detail(cid: str) -> dict[str, object]:
 def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
     if store.get_customer(cid) is None:
         return {"error": "customer not found"}
-    store.add_message(cid, "customer", req.text)
+    inbound_msg = store.add_message(cid, "customer", req.text)
     decision = closer.decide(cid, req.text)
+    # backfill the operator-facing translation onto the customer's message (双语对照)
+    store.set_message_translation(
+        inbound_msg["id"],
+        decision.get("inbound_translation", ""),
+        decision.get("customer_lang", ""),
+    )
     sent: list[dict[str, object]] = []
     if req.auto_send:
         sent = closer.apply_decision(cid, decision)
@@ -247,6 +254,7 @@ def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
         "decision": decision,
         "sent": sent,
         "customer": store.get_customer(cid),
+        "messages": store.list_messages(cid),
         "memory": store.list_memory(cid),
     }
 

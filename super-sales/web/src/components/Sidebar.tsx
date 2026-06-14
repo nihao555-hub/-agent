@@ -1,10 +1,11 @@
 import type { Health } from "../types";
-import { IconBook, IconChat, IconSpark } from "../icons";
+import { IconBook, IconBrain, IconChat, IconSpark } from "../icons";
 
-export type View = "workbench" | "knowledge" | "about";
+export type View = "console" | "workbench" | "knowledge" | "about";
 
 const NAV: { key: View; label: string; icon: typeof IconChat; hint: string }[] = [
-  { key: "workbench", label: "私域跟单工作台", icon: IconChat, hint: "核心" },
+  { key: "console", label: "实时成交台", icon: IconBrain, hint: "核心" },
+  { key: "workbench", label: "对话复盘工作台", icon: IconChat, hint: "" },
   { key: "knowledge", label: "销售方法论库", icon: IconBook, hint: "" },
   { key: "about", label: "关于产品", icon: IconSpark, hint: "" },
 ];
