@@ -38,6 +38,36 @@ _WIKIDATA_ENTITY = "https://www.wikidata.org/wiki/Special:EntityData/{qid}.json"
 _WIKIPEDIA_SUMMARY = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 _GNEWS_RSS = "https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={gl}:{lang}"
 
+# SEC EDGAR (US public-company filings) — free, no key. UA must identify the caller.
+_SEC_UA = "SuperSalesIntel/1.0 sales-research@example.com"
+_SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json"
+_SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+
+# Commercial "buying-trigger" signal: leadership / money / growth moves a closer cares about.
+_SIGNAL_TERMS = "hiring OR funding OR raises OR acquisition OR layoffs OR partnership OR CEO OR CFO OR expansion"
+
+# Public homepage tech-stack markers → (tool, what it implies for a seller).
+_TECH_MARKERS: list[tuple[str, str]] = [
+    ("hubspot", "HubSpot (营销/CRM)"),
+    ("marketo", "Marketo (营销自动化)"),
+    ("pardot", "Salesforce Pardot (B2B 营销)"),
+    ("salesforce", "Salesforce (CRM)"),
+    ("force.com", "Salesforce (CRM)"),
+    ("intercom", "Intercom (客服/对话)"),
+    ("drift.com", "Drift (对话营销)"),
+    ("zendesk", "Zendesk (客服)"),
+    ("segment.com", "Segment (数据/CDP)"),
+    ("googletagmanager", "Google Tag Manager (分析)"),
+    ("google-analytics", "Google Analytics (分析)"),
+    ("shopify", "Shopify (电商)"),
+    ("cloudflare", "Cloudflare (CDN/安全)"),
+    ("wordpress", "WordPress (CMS)"),
+    ("hsforms", "HubSpot 表单"),
+    ("zoominfo", "ZoomInfo (销售情报)"),
+    ("amplitude", "Amplitude (产品分析)"),
+    ("mixpanel", "Mixpanel (产品分析)"),
+]
+
 # Wikidata property → human label we care about.
 _PROPS = {
     "P452": "industry",
@@ -178,11 +208,17 @@ def _wikipedia_summary(s: requests.Session, company: str, lang: str) -> str:
     return ""
 
 
-def _news(company: str, *, lang: str = "en", country: str = "US") -> list[dict[str, str]]:
-    """Recent public headlines via Google News RSS (no key). Best-effort."""
+def _news(
+    company: str, *, lang: str = "en", country: str = "US", extra: str = ""
+) -> list[dict[str, str]]:
+    """Recent public headlines via Google News RSS (no key). Best-effort.
+
+    ``extra`` appends a boolean query (e.g. buying-signal terms) to bias the feed
+    toward commercially actionable headlines."""
     code = (lang or "en").split("-")[0].lower() or "en"
     gl = (country or "US").upper()[:2] or "US"
-    url = _GNEWS_RSS.format(q=quote(f'"{company}"'), hl=code, gl=gl, lang=code)
+    q = f'"{company}" ({extra})' if extra else f'"{company}"'
+    url = _GNEWS_RSS.format(q=quote(q), hl=code, gl=gl, lang=code)
     try:
         r = requests.get(url, headers={"User-Agent": _UA}, timeout=_TIMEOUT)
         root = ET.fromstring(r.content)
@@ -204,21 +240,99 @@ def _news(company: str, *, lang: str = "en", country: str = "US") -> list[dict[s
     return out
 
 
-def _site_blurb(domain: str) -> str:
-    """Grab the public meta description / title of the company homepage."""
+def _homepage(domain: str) -> tuple[str, list[str]]:
+    """Return (public blurb, detected tech-stack hints) from the company homepage.
+
+    Only the publicly served HTML is inspected — no login, no intrusive probing."""
     if not domain:
-        return ""
+        return "", []
     url = domain if domain.startswith("http") else f"https://{domain}"
     try:
         r = requests.get(url, headers={"User-Agent": _UA}, timeout=_TIMEOUT)
-        html = r.text[:200_000]
+        html = r.text[:300_000]
     except Exception:  # noqa: BLE001
-        return ""
+        return "", []
+    blurb = ""
     m = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)', html, re.I)
     if m:
-        return m.group(1).strip()[:300]
-    m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)
-    return m.group(1).strip()[:200] if m else ""
+        blurb = m.group(1).strip()[:300]
+    else:
+        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)
+        blurb = m.group(1).strip()[:200] if m else ""
+    low = html.lower()
+    tech: list[str] = []
+    for marker, label in _TECH_MARKERS:
+        if marker in low and label not in tech:
+            tech.append(label)
+    return blurb, tech[:10]
+
+
+_SEC_TICKERS_CACHE: list[dict[str, Any]] | None = None
+
+
+def _load_sec_tickers(s: requests.Session) -> list[dict[str, Any]]:
+    global _SEC_TICKERS_CACHE
+    if _SEC_TICKERS_CACHE is not None:
+        return _SEC_TICKERS_CACHE
+    try:
+        r = s.get(_SEC_TICKERS, headers={"User-Agent": _SEC_UA}, timeout=_TIMEOUT)
+        data = r.json()
+        _SEC_TICKERS_CACHE = list(data.values()) if isinstance(data, dict) else []
+    except Exception:  # noqa: BLE001
+        _SEC_TICKERS_CACHE = []
+    return _SEC_TICKERS_CACHE
+
+
+def _norm_company(name: str) -> str:
+    n = re.sub(r"[^a-z0-9 ]+", " ", (name or "").lower())
+    n = re.sub(r"\b(inc|corp|corporation|co|ltd|llc|plc|holdings|group|the)\b", " ", n)
+    return re.sub(r"\s+", " ", n).strip()
+
+
+def _sec_edgar(s: requests.Session, company: str) -> dict[str, Any]:
+    """Public-company basics from SEC EDGAR (no key): ticker, SIC industry, recent
+    filings. Strong B2B signal — public co. ⇒ budget cycles, earnings, 8-K events."""
+    target = _norm_company(company)
+    if not target:
+        return {}
+    cik = ""
+    for row in _load_sec_tickers(s):
+        if _norm_company(str(row.get("title", ""))) == target:
+            cik = str(row.get("cik_str", ""))
+            break
+    if not cik:
+        # fall back to a loose contains-match (handles "GitLab" vs "GitLab Inc.")
+        for row in _load_sec_tickers(s):
+            t = _norm_company(str(row.get("title", "")))
+            if t and (t.startswith(target) or target.startswith(t)):
+                cik = str(row.get("cik_str", ""))
+                break
+    if not cik:
+        return {}
+    try:
+        r = s.get(
+            _SEC_SUBMISSIONS.format(cik=int(cik)),
+            headers={"User-Agent": _SEC_UA},
+            timeout=_TIMEOUT,
+        )
+        d = r.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    recent = d.get("filings", {}).get("recent", {})
+    forms = recent.get("form", []) or []
+    dates = recent.get("filingDate", []) or []
+    filings: list[str] = []
+    for form, date in zip(forms, dates):
+        if form in ("10-K", "10-Q", "8-K", "S-1", "DEF 14A") and len(filings) < 6:
+            filings.append(f"{date} {form}")
+    return {
+        "is_public": True,
+        "ticker": (d.get("tickers") or [""])[0],
+        "exchange": (d.get("exchanges") or [""])[0],
+        "sic_industry": d.get("sicDescription", ""),
+        "fiscal_year_end": d.get("fiscalYearEnd", ""),
+        "recent_filings": filings,
+    }
 
 
 def enrich(company: str, domain: str = "", country: str = "", *, lang: str = "en") -> dict[str, Any]:
@@ -231,11 +345,16 @@ def enrich(company: str, domain: str = "", country: str = "", *, lang: str = "en
     summary = _wikipedia_summary(s, company, lang)
     gl = (country or "US").upper()[:2] or "US"
     news = _news(company, lang=lang, country=gl)
-    blurb = _site_blurb(domain or wd.get("website", ""))
+    signals = _news(company, lang=lang, country=gl, extra=_SIGNAL_TERMS)
+    blurb, tech = _homepage(domain or wd.get("website", ""))
+    edgar = _sec_edgar(s, company)
     return {
         "wikidata": wd,
         "summary": summary,
         "news": news,
+        "signals": signals,
         "site_blurb": blurb,
-        "available": bool(wd or summary or news),
+        "tech_stack": tech,
+        "edgar": edgar,
+        "available": bool(wd or summary or news or edgar or tech),
     }

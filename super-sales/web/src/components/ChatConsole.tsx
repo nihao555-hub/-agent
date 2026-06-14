@@ -787,6 +787,8 @@ function BackgroundCard({ bg }: { bg: Background }) {
   const contact = bg.contact;
   const accounts = contact?.accounts ?? [];
   const services = contact?.email_services ?? [];
+  const edgar = bg.intel?.edgar;
+  const techStack = br.tech_stack?.length ? br.tech_stack : (bg.intel?.tech_stack ?? []);
   return (
     <div className="rounded-card border border-line bg-surface p-3.5">
       <div className="mb-2 flex items-center justify-between">
@@ -815,6 +817,31 @@ function BackgroundCard({ bg }: { bg: Background }) {
         )}
         {br.company_scale && (
           <div><span className="text-muted">规模：</span>{br.company_scale}</div>
+        )}
+        {br.company_scale_money && (
+          <div><span className="text-muted">经营/预算线索：</span>{br.company_scale_money}</div>
+        )}
+        {edgar?.is_public && (
+          <div className="text-[11px]">
+            <span className="text-muted">上市：</span>
+            {edgar.ticker}
+            {edgar.exchange ? `·${edgar.exchange}` : ""}
+            {edgar.sic_industry ? ` · ${edgar.sic_industry}` : ""}
+            {edgar.recent_filings?.length ? (
+              <span className="text-muted"> · 近期备案 {edgar.recent_filings.slice(0, 3).join("、")}</span>
+            ) : null}
+          </div>
+        )}
+        {techStack.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-muted">技术栈：</span>
+            {techStack.slice(0, 8).map((t, i) => (
+              <Badge key={i} tone="neutral">{t}</Badge>
+            ))}
+          </div>
+        )}
+        {br.competitive_landscape && (
+          <div><span className="text-muted">竞争态势：</span>{br.competitive_landscape}</div>
         )}
         {br.footprint_summary && (
           <div><span className="text-muted">公开足迹：</span>{br.footprint_summary}</div>

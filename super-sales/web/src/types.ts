@@ -184,6 +184,9 @@ export interface BackgroundBrief {
   contact_summary?: string;
   icebreakers?: string[];
   talking_points?: string[];
+  company_scale_money?: string;
+  tech_stack?: string[];
+  competitive_landscape?: string;
   buying_triggers?: string[];
   sales_angle?: string;
   caution?: string;
@@ -212,11 +215,23 @@ export interface NewsItem {
   source?: string;
 }
 
+export interface SecEdgar {
+  is_public?: boolean;
+  ticker?: string;
+  exchange?: string;
+  sic_industry?: string;
+  fiscal_year_end?: string;
+  recent_filings?: string[];
+}
+
 export interface BusinessIntel {
   wikidata?: Record<string, string>;
   summary?: string;
   news?: NewsItem[];
+  signals?: NewsItem[];
   site_blurb?: string;
+  tech_stack?: string[];
+  edgar?: SecEdgar;
   available?: boolean;
 }
 

@@ -151,21 +151,38 @@ def _brief(
         "contact_summary(若给出对接人公开账号，则一句话画像，否则空字符串)、"
         "icebreakers(针对该对接人/公司的破冰话题数组，结合其公开账号/动态，没有依据就给通用话题)、"
         "talking_points(3-5 条建立信任的话题数组)、"
+        "company_scale_money(一句话经营/预算线索，结合上市状态/财报/员工数，没有就空字符串)、"
+        "tech_stack(对方公开技术栈线索数组，结合给出的官网技术标记，没有就空数组)、"
+        "competitive_landscape(一句话竞争态势/替换或互补机会，没有依据就空字符串)、"
         f"{extra_fields}、caution(合规/沟通注意事项)。"
     )
     wd = intel.get("wikidata", {})
+    edgar = intel.get("edgar", {}) or {}
+    tech = intel.get("tech_stack", []) or []
     subdomains = footprint.get("hosts", [])
     news_lines = [f"{n.get('date', '')} {n.get('title', '')}（{n.get('source', '')}）" for n in intel.get("news", [])]
+    signal_lines = [f"{n.get('date', '')} {n.get('title', '')}（{n.get('source', '')}）" for n in intel.get("signals", [])]
     osint_lines = spiderfoot_intel.summary_lines(company_osint)
     people_lines = people_osint.summary_lines(people)
+    if edgar.get("is_public"):
+        edgar_line = (
+            f"上市公司｜代码={edgar.get('ticker', '?')}({edgar.get('exchange', '?')}) "
+            f"SIC 行业={edgar.get('sic_industry', '?')} 财年末={edgar.get('fiscal_year_end', '?')} "
+            f"近期备案={', '.join(edgar.get('recent_filings', [])) or '无'}"
+        )
+    else:
+        edgar_line = "未匹配到美股公开备案（可能非上市/非美股）"
     user = (
         f"客户类型：{'C 端消费者(纯卖货)' if is_b2c else 'B 端企业(顾问式)'}\n"
         f"公司名：{company or '未知'}\n国家：{country or '未知'}\n主域名：{domain or '未知'}\n"
         f"Wikidata 画像：行业={wd.get('industry', '?')} 员工数={wd.get('employees', '?')} "
         f"总部={wd.get('headquarters', '?')} 国家={wd.get('country', '?')} 成立={wd.get('inception', '?')}\n"
+        f"SEC EDGAR 经营信号：{edgar_line}\n"
         f"维基百科简介：{intel.get('summary') or '无'}\n"
         f"官网简介：{intel.get('site_blurb') or '无'}\n"
+        f"官网技术栈线索：{', '.join(tech) or '无'}\n"
         f"近期公开新闻（{len(news_lines)}）：\n" + ("\n".join(f"- {x}" for x in news_lines[:8]) or "无") + "\n"
+        f"采购/经营信号新闻（{len(signal_lines)}）：\n" + ("\n".join(f"- {x}" for x in signal_lines[:6]) or "无") + "\n"
         f"公开子域（{len(subdomains)}）：{', '.join(subdomains[:25]) or '无'}\n"
         f"公开邮箱：{', '.join(footprint.get('emails', [])) or '无'}\n"
         f"公司 OSINT(SpiderFoot)：\n" + ("\n".join(f"- {x}" for x in osint_lines) or "无") + "\n"

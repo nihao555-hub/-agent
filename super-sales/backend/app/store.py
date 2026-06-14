@@ -418,6 +418,19 @@ def background_block(customer_id: str) -> str:
         lines.append(f"行业：{brief['industry_guess']}")
     if brief.get("company_scale"):
         lines.append(f"规模：{brief['company_scale']}")
+    if brief.get("company_scale_money"):
+        lines.append(f"经营/预算线索：{brief['company_scale_money']}")
+    edgar = ((bg.get("intel") or {}).get("edgar")) or {}
+    if edgar.get("is_public"):
+        lines.append(
+            f"上市公司：{edgar.get('ticker', '')}({edgar.get('exchange', '')}) "
+            f"{edgar.get('sic_industry', '')}".strip()
+        )
+    tech = brief.get("tech_stack") or ((bg.get("intel") or {}).get("tech_stack") or [])
+    if tech:
+        lines.append("技术栈线索：" + "、".join(tech[:8]))
+    if brief.get("competitive_landscape"):
+        lines.append(f"竞争态势：{brief['competitive_landscape']}")
     if brief.get("footprint_summary"):
         lines.append(f"公开足迹：{brief['footprint_summary']}")
     if brief.get("recent_developments"):
