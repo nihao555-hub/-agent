@@ -87,6 +87,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             summary TEXT DEFAULT '',
             details TEXT DEFAULT '',
             price_info TEXT DEFAULT '',
+            price_min REAL,            -- 报价下限：AI 绝不报低于此价
+            price_max REAL,            -- 报价上限：AI 绝不报高于此价
+            currency TEXT DEFAULT '',
             created_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS assets (
@@ -118,6 +121,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("translation", "lang"):
         if col not in cols:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT DEFAULT ''")
+    pcols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
+    if "price_min" not in pcols:
+        conn.execute("ALTER TABLE products ADD COLUMN price_min REAL")
+    if "price_max" not in pcols:
+        conn.execute("ALTER TABLE products ADD COLUMN price_max REAL")
+    if "currency" not in pcols:
+        conn.execute("ALTER TABLE products ADD COLUMN currency TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -299,12 +309,21 @@ def list_products() -> list[dict[str, Any]]:
     return products
 
 
-def create_product(name: str, summary: str = "", details: str = "", price_info: str = "") -> dict[str, Any]:
+def create_product(
+    name: str,
+    summary: str = "",
+    details: str = "",
+    price_info: str = "",
+    price_min: float | None = None,
+    price_max: float | None = None,
+    currency: str = "",
+) -> dict[str, Any]:
     pid = _uid("prod")
     with _lock:
         _connect().execute(
-            "INSERT INTO products (id,name,summary,details,price_info,created_at) VALUES (?,?,?,?,?,?)",
-            (pid, name, summary, details, price_info, _now()),
+            "INSERT INTO products (id,name,summary,details,price_info,price_min,price_max,currency,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (pid, name, summary, details, price_info, price_min, price_max, currency, _now()),
         )
         _connect().commit()
     with _lock:
@@ -415,6 +434,7 @@ _DEFAULT_SETTINGS = {
     "disclose_ai": "when_asked",  # always | when_asked | never (按辖区合规)
     "privacy_redlines": "成本价、进货价、利润率、内部定价底线与让步上限、其他客户隐私与名单、内部人员联系方式、未脱敏证件/合同/财务、公司机密",
     "deal_rules": "",
+    "mode": "auto",  # auto = 全自动直接发；semi = 半AI，只给建议回复待人工采纳
 }
 
 

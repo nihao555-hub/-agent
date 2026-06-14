@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import random
 
-# tuning knobs (milliseconds)
-_READ_MS_PER_CHAR = 22          # time to "read" the customer's message
-_READ_MIN, _READ_MAX = 600, 6000
-_THINK_MS = 700                 # brief pause before starting to type the first reply
-_TYPE_MS_PER_CHAR = 70          # typing speed (~14 chars/sec, casual IM typing)
-_TYPE_MIN, _TYPE_MAX = 900, 9000
+# tuning knobs (milliseconds) — tuned for *real* sales rhythm, not instant replies
+_READ_MS_PER_CHAR = 35          # time to "read" the customer's message
+_READ_MIN, _READ_MAX = 1200, 9000
+_THINK_MS_PER_CHAR = 14         # extra "thinking" scaled by how much we're about to say
+_THINK_MIN, _THINK_MAX = 900, 7000
+_TYPE_MS_PER_CHAR = 90          # typing speed (~11 chars/sec, casual IM typing)
+_TYPE_MIN, _TYPE_MAX = 1400, 14000
 _JITTER = 0.25                  # +/- 25% randomness
 
 
@@ -28,18 +29,28 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def pacing(inbound: str, replies: list[str], seed: int | None = None) -> list[int]:
-    """Return a delay (ms) to wait before showing each reply message.
+def plan(inbound: str, replies: list[str], seed: int | None = None) -> dict[str, object]:
+    """Phase plan for a human-like turn.
 
-    delays[0] = read the inbound + think + type the first message.
-    delays[i] = type the i-th message (a short inter-message beat is implicit).
+    Returns ``read_ms`` (show "reading…" first), ``think_ms`` (then a thinking
+    beat before the first keystroke) and ``type_ms`` — one "typing…" duration
+    per outgoing message. The UI shows each phase in turn so replies arrive at a
+    real person's pace instead of instantly.
     """
     rng = random.Random(seed)
+    j = lambda v: int(v * (1 + rng.uniform(-_JITTER, _JITTER)))  # noqa: E731
     read = _clamp(len(inbound or "") * _READ_MS_PER_CHAR, _READ_MIN, _READ_MAX)
+    first_len = len(replies[0]) if replies else 0
+    think = _clamp(first_len * _THINK_MS_PER_CHAR, _THINK_MIN, _THINK_MAX)
+    type_ms = [j(_clamp(len(m or "") * _TYPE_MS_PER_CHAR, _TYPE_MIN, _TYPE_MAX)) for m in replies]
+    return {"read_ms": j(read), "think_ms": j(think), "type_ms": type_ms}
+
+
+def pacing(inbound: str, replies: list[str], seed: int | None = None) -> list[int]:
+    """Back-compat: a single delay (ms) before each message (read+think folded into [0])."""
+    p = plan(inbound, replies, seed)
+    type_ms = p["type_ms"]  # type: ignore[assignment]
     out: list[int] = []
-    for i, msg in enumerate(replies):
-        typing = _clamp(len(msg or "") * _TYPE_MS_PER_CHAR, _TYPE_MIN, _TYPE_MAX)
-        base = (read + _THINK_MS + typing) if i == 0 else typing
-        jitter = 1 + rng.uniform(-_JITTER, _JITTER)
-        out.append(int(base * jitter))
+    for i, t in enumerate(type_ms):  # type: ignore[arg-type]
+        out.append(int(p["read_ms"]) + int(p["think_ms"]) + t if i == 0 else t)  # type: ignore[call-overload]
     return out

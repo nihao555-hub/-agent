@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  approveDecision,
   createCustomer,
   getCustomer,
+  getSettings,
   listCustomers,
   runBackground,
   sendInbound,
   simulateCustomer,
+  updateSettings,
 } from "../api";
 import type { InboundResult } from "../api";
 import type {
@@ -16,6 +19,7 @@ import type {
   Decision,
   MemoryFact,
   Persona,
+  Settings,
 } from "../types";
 import { Badge } from "../ui";
 import {
@@ -64,8 +68,18 @@ const WIN_TEXT: Record<"red" | "yellow" | "green", string> = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// clamp the backend's realistic pacing into a usable range for the live console
-const paceMs = (ms: number | undefined) => Math.min(Math.max(ms ?? 1500, 700), 4500);
+// clamp the backend's realistic per-phase pacing into a usable range for the
+// live console — long enough to read like a real person, short enough to demo.
+const readMs = (ms: number | undefined) => Math.min(Math.max(ms ?? 1500, 700), 3500);
+const thinkMs = (ms: number | undefined) => Math.min(Math.max(ms ?? 1200, 500), 3000);
+const typeMs = (ms: number | undefined) => Math.min(Math.max(ms ?? 1500, 700), 4500);
+
+type Phase = "reading" | "thinking" | "typing" | null;
+const PHASE_LABEL: Record<"reading" | "thinking" | "typing", string> = {
+  reading: "AI 销冠正在读消息…",
+  thinking: "AI 销冠正在思考怎么推进…",
+  typing: "AI 销冠正在输入…",
+};
 
 export default function ChatConsole({
   channels,
@@ -88,7 +102,11 @@ export default function ChatConsole({
   const [bgBusy, setBgBusy] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [typing, setTyping] = useState(false);
+  const [phase, setPhase] = useState<Phase>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  // Semi-AI (人审): suggested reply awaiting operator approval (editable).
+  const [pending, setPending] = useState<{ cid: string; decision: Decision } | null>(null);
+  const [draft, setDraft] = useState<string[]>([]);
   const [persona, setPersona] = useState<string>(personas[0]?.key ?? "skeptic");
   const [showNew, setShowNew] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -106,8 +124,16 @@ export default function ChatConsole({
 
   useEffect(() => {
     void refreshCustomers(true);
+    void getSettings().then(setSettings);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const semi = settings?.mode === "semi";
+
+  async function toggleMode() {
+    const next = semi ? "auto" : "semi";
+    setSettings(await updateSettings({ mode: next }));
+  }
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
@@ -116,6 +142,7 @@ export default function ChatConsole({
   async function selectCustomer(id: string) {
     setSelectedId(id);
     setDecision(null);
+    setPending(null);
     const d = await getCustomer(id);
     setMessages(d.messages);
     setMemory(d.memory);
@@ -133,9 +160,30 @@ export default function ChatConsole({
     }
   }
 
-  // Reveal the AI's reply messages with human-like pacing (read delay + typing),
-  // instead of dumping them instantly. The right-panel reasoning shows at once
-  // (operator insight); only the chat bubbles are paced like a real person.
+  // Reveal the AI's outgoing bubbles at a real person's pace instead of dumping
+  // them instantly: read the inbound → think → type each message in turn. The
+  // right-panel reasoning shows at once (operator insight); only the chat bubbles
+  // are paced. Returns false if a newer turn took over mid-way.
+  async function revealMessages(agentMsgs: ChatMessage[], dec: Decision, token: number) {
+    const types = dec.type_ms ?? dec.pacing ?? [];
+    setPhase("reading");
+    await sleep(readMs(dec.read_ms));
+    if (turnRef.current !== token) return;
+    setPhase("thinking");
+    await sleep(thinkMs(dec.think_ms));
+    for (let i = 0; i < agentMsgs.length; i++) {
+      if (turnRef.current !== token) return;
+      setPhase("typing");
+      await sleep(typeMs(types[i]));
+      if (turnRef.current !== token) return;
+      setMessages((prev) => [...prev, agentMsgs[i]]);
+    }
+    setPhase(null);
+  }
+
+  // Apply a turn result. In auto mode we reveal the agent's (already-sent)
+  // bubbles with pacing. In semi mode the backend sent nothing — we surface the
+  // suggested reply for the operator to approve/edit first.
   async function playTurn(res: InboundResult, cid: string) {
     const token = ++turnRef.current;
     const sentIds = new Set(res.sent.map((s) => s.id));
@@ -145,18 +193,48 @@ export default function ChatConsole({
     setMemory(res.memory);
     setCustomers((prev) => prev.map((c) => (c.id === cid ? res.customer : c)));
     setMessages(base);
-    const pacing = res.decision.pacing ?? [];
-    for (let i = 0; i < agentMsgs.length; i++) {
-      setTyping(true);
-      await sleep(paceMs(pacing[i]));
-      if (turnRef.current !== token) return; // a newer turn / customer took over
-      setMessages((prev) => [...prev, agentMsgs[i]]);
+    if (res.sent.length === 0 && (res.decision.reply?.length ?? 0) > 0) {
+      // semi-AI: hold for operator approval
+      setPending({ cid, decision: res.decision });
+      setDraft([...res.decision.reply]);
+      setPhase(null);
+      return;
     }
-    setTyping(false);
+    await revealMessages(agentMsgs, res.decision, token);
+  }
+
+  async function handleApprove() {
+    if (!pending) return;
+    const { cid, decision } = pending;
+    const reply = draft.map((s) => s.trim()).filter(Boolean);
+    if (reply.length === 0) return;
+    setPending(null);
+    setBusy(true);
+    try {
+      const res = await approveDecision(cid, { ...decision, reply });
+      const token = ++turnRef.current;
+      const sentIds = new Set(res.sent.map((s) => s.id));
+      setMessages(res.messages.filter((m) => !sentIds.has(m.id)));
+      setMemory(res.memory);
+      setCustomers((prev) => prev.map((c) => (c.id === cid ? res.customer : c)));
+      await revealMessages(
+        res.messages.filter((m) => sentIds.has(m.id)),
+        { ...decision, reply },
+        token,
+      );
+    } finally {
+      setBusy(false);
+      setPhase(null);
+    }
+  }
+
+  function handleReject() {
+    setPending(null);
+    setDraft([]);
   }
 
   async function handleSend() {
-    if (!input.trim() || !selectedId || busy) return;
+    if (!input.trim() || !selectedId || busy || pending) return;
     const text = input.trim();
     const cid = selectedId;
     setInput("");
@@ -171,13 +249,12 @@ export default function ChatConsole({
       await playTurn(res, cid);
     } finally {
       setBusy(false);
-      setTyping(false);
     }
   }
 
   // Let the system role-play the customer (different tempers) to pressure-test the closer.
   async function handleSimulate() {
-    if (!selectedId || busy) return;
+    if (!selectedId || busy || pending) return;
     const cid = selectedId;
     setBusy(true);
     try {
@@ -185,7 +262,6 @@ export default function ChatConsole({
       await playTurn(res, cid);
     } finally {
       setBusy(false);
-      setTyping(false);
     }
   }
 
@@ -196,6 +272,8 @@ export default function ChatConsole({
         platform={platform}
         setPlatform={setPlatform}
         onNew={() => setShowNew(true)}
+        semi={semi}
+        onToggleMode={() => void toggleMode()}
       />
       <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1fr)_344px]">
         {/* 左：客户筛选 */}
@@ -253,15 +331,25 @@ export default function ChatConsole({
                 {messages.map((m) => (
                   <Bubble key={m.id} m={m} />
                 ))}
-                {busy && (
+                {(busy || phase) && (
                   <div className="flex items-center gap-2 text-[12.5px] text-muted">
                     <span className="flex gap-1">
                       <Dot /> <Dot /> <Dot />
                     </span>
-                    {typing ? "AI 销冠正在输入…" : "AI 销冠正在读消息、组织话术…"}
+                    {phase ? PHASE_LABEL[phase] : "AI 销冠正在读消息、组织话术…"}
                   </div>
                 )}
               </div>
+              {pending && (
+                <ApprovalPanel
+                  decision={pending.decision}
+                  draft={draft}
+                  setDraft={setDraft}
+                  onApprove={() => void handleApprove()}
+                  onReject={handleReject}
+                  busy={busy}
+                />
+              )}
               <div className="border-t border-line bg-surface px-4 py-3">
                 <div className="flex items-end gap-2">
                   <textarea
@@ -352,11 +440,15 @@ function PlatformBar({
   platform,
   setPlatform,
   onNew,
+  semi,
+  onToggleMode,
 }: {
   channels: ChannelInfo[];
   platform: string;
   setPlatform: (p: string) => void;
   onNew: () => void;
+  semi: boolean;
+  onToggleMode: () => void;
 }) {
   const tabs = [{ name: "all", label: "全部", configured: true, risk: "" }, ...channels];
   return (
@@ -385,12 +477,104 @@ function PlatformBar({
           );
         })}
       </div>
-      <button
-        onClick={onNew}
-        className="flex items-center gap-1.5 rounded-lg border border-line bg-bone px-3 py-1.5 text-[12.5px] text-ink transition hover:bg-surface"
-      >
-        <IconPlus width={15} height={15} /> 新建客户
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onToggleMode}
+          title={semi ? "半AI（人审）：AI 只给建议，需人工采纳后才发出" : "全自动：AI 直接发出"}
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition ${
+            semi
+              ? "border-pale-yellow-ink/40 bg-pale-yellow/40 text-pale-yellow-ink"
+              : "border-line bg-bone text-charcoal hover:bg-surface"
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${semi ? "bg-pale-yellow-ink" : "bg-pale-green-ink"}`} />
+          {semi ? "半AI · 人审" : "全自动"}
+        </button>
+        <button
+          onClick={onNew}
+          className="flex items-center gap-1.5 rounded-lg border border-line bg-bone px-3 py-1.5 text-[12.5px] text-ink transition hover:bg-surface"
+        >
+          <IconPlus width={15} height={15} /> 新建客户
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Semi-AI (人审) review: the operator sees the AI's suggested reply (one box per
+// message), can edit / add / drop lines, then 采纳 (send) or 否决 (discard).
+function ApprovalPanel({
+  decision,
+  draft,
+  setDraft,
+  onApprove,
+  onReject,
+  busy,
+}: {
+  decision: Decision;
+  draft: string[];
+  setDraft: (d: string[]) => void;
+  onApprove: () => void;
+  onReject: () => void;
+  busy: boolean;
+}) {
+  const setLine = (i: number, v: string) => setDraft(draft.map((d, j) => (j === i ? v : d)));
+  const dropLine = (i: number) => setDraft(draft.filter((_, j) => j !== i));
+  const addLine = () => setDraft([...draft, ""]);
+  return (
+    <div className="border-t border-pale-yellow-ink/30 bg-pale-yellow/25 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[12px] font-medium text-pale-yellow-ink">
+          <IconBrain width={14} height={14} /> 半AI · 待人工采纳（{draft.length} 条建议）
+        </span>
+        {decision.handoff && (
+          <Badge tone="red">AI 建议转人工：{decision.handoff_reason || "触发护栏"}</Badge>
+        )}
+      </div>
+      <div className="space-y-2">
+        {draft.map((line, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="mt-2 font-mono text-[11px] text-muted">{i + 1}</span>
+            <textarea
+              value={line}
+              onChange={(e) => setLine(i, e.target.value)}
+              rows={1}
+              className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-charcoal"
+            />
+            <button
+              onClick={() => dropLine(i)}
+              title="删除这条"
+              className="mt-1 rounded-md px-2 py-1 text-[12px] text-muted transition hover:bg-pale-red/40 hover:text-pale-red-ink"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <button
+          onClick={addLine}
+          className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11.5px] text-charcoal transition hover:bg-bone"
+        >
+          + 加一条
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onReject}
+            disabled={busy}
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12.5px] text-charcoal transition hover:bg-bone disabled:opacity-40"
+          >
+            否决
+          </button>
+          <button
+            onClick={onApprove}
+            disabled={busy || draft.every((d) => !d.trim())}
+            className="flex items-center gap-1.5 rounded-lg bg-ink px-4 py-1.5 text-[12.5px] text-canvas transition hover:bg-charcoal disabled:opacity-40"
+          >
+            <IconSend width={14} height={14} /> 采纳并发出
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

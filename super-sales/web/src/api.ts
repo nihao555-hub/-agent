@@ -7,6 +7,7 @@ import type {
   Health,
   MemoryFact,
   PipelineStep,
+  Settings,
 } from "./types";
 
 export async function getHealth(): Promise<Health> {
@@ -91,6 +92,33 @@ export async function simulateCustomer(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ persona, auto_send: true }),
+  });
+  return r.json();
+}
+
+export async function getSettings(): Promise<Settings> {
+  const r = await fetch("/api/settings");
+  return r.json();
+}
+
+export async function updateSettings(values: Partial<Settings>): Promise<Settings> {
+  const r = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  return r.json();
+}
+
+/** Semi-AI mode: send the operator-approved (possibly edited) decision. */
+export async function approveDecision(
+  id: string,
+  decision: Decision,
+): Promise<InboundResult> {
+  const r = await fetch(`/api/customers/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision }),
   });
   return r.json();
 }

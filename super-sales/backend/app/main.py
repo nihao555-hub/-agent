@@ -185,6 +185,9 @@ class ProductCreate(BaseModel):
     summary: str = ""
     details: str = ""
     price_info: str = ""
+    price_min: float | None = Field(None, description="报价下限，AI 绝不报低于此")
+    price_max: float | None = Field(None, description="报价上限，AI 绝不报高于此")
+    currency: str = ""
 
 
 class AssetCreate(BaseModel):
@@ -249,12 +252,33 @@ def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
         decision.get("inbound_translation", ""),
         decision.get("customer_lang", ""),
     )
+    # Semi-AI (人审) mode: never auto-send; the operator approves/edits first.
+    mode = store.get_settings().get("mode", "auto")
+    auto = req.auto_send and mode != "semi"
     sent: list[dict[str, object]] = []
-    if req.auto_send:
+    if auto:
         sent = closer.apply_decision(cid, decision)
     decision.pop("evidence", None)
     return {
         "decision": decision,
+        "sent": sent,
+        "customer": store.get_customer(cid),
+        "messages": store.list_messages(cid),
+        "memory": store.list_memory(cid),
+    }
+
+
+class ApproveRequest(BaseModel):
+    decision: dict[str, object] = Field(..., description="人工采纳/改写后的决策对象")
+
+
+@app.post("/api/customers/{cid}/approve")
+def post_approve(cid: str, req: ApproveRequest) -> dict[str, object]:
+    """Semi-AI (人审) mode: operator approves/edits the suggested reply, then we send it."""
+    if store.get_customer(cid) is None:
+        return {"error": "customer not found"}
+    sent = closer.apply_decision(cid, dict(req.decision))
+    return {
         "sent": sent,
         "customer": store.get_customer(cid),
         "messages": store.list_messages(cid),
@@ -317,7 +341,15 @@ def get_products() -> dict[str, object]:
 
 @app.post("/api/products")
 def post_product(req: ProductCreate) -> dict[str, object]:
-    return store.create_product(req.name, req.summary, req.details, req.price_info)
+    return store.create_product(
+        req.name,
+        req.summary,
+        req.details,
+        req.price_info,
+        price_min=req.price_min,
+        price_max=req.price_max,
+        currency=req.currency,
+    )
 
 
 @app.post("/api/assets")

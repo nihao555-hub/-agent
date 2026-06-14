@@ -103,13 +103,35 @@ def _evidence_block(evidence: list[dict[str, Any]]) -> str:
     return "\n".join(f"[{e['id']}] {e['title']}：{e['text']}" for e in evidence)
 
 
-def _assets_summary(products: list[dict[str, Any]]) -> str:
+def _price_band(p: dict[str, Any]) -> str:
+    lo, hi = p.get("price_min"), p.get("price_max")
+    cur = p.get("currency") or ""
+    if lo is None and hi is None:
+        return ""
+    if lo is not None and hi is not None:
+        mid = lo + (hi - lo) * 0.5
+        return (
+            f"｜报价区间 {cur}{lo:g}~{cur}{hi:g}（中位约 {cur}{mid:g}）："
+            f"默认从中位偏上开口，砍价时演足为难/“已是最低/要向上申请”，"
+            f"但绝不低于 {cur}{lo:g}、不高于 {cur}{hi:g}；逼近底价或要求破价即转人工"
+        )
+    if lo is not None:
+        return f"｜报价不得低于 {cur}{lo:g}"
+    return f"｜报价不得高于 {cur}{hi:g}"
+
+
+def _catalog_summary(products: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for p in products:
+        head = f"〔商品〕{p.get('name', '')}"
+        if p.get("price_info"):
+            head += f"｜{p['price_info']}"
+        head += _price_band(p)
+        lines.append(head)
         for a in p.get("assets", []):
             flag = "可对外" if a.get("shareable") else "禁止外发"
-            lines.append(f"[{a['id']}] {a['kind']}·{a['filename']} 「{a.get('caption', '')}」({flag})")
-    return "\n".join(lines) if lines else "（暂无可用素材）"
+            lines.append(f"  [{a['id']}] {a['kind']}·{a['filename']} 「{a.get('caption', '')}」({flag})")
+    return "\n".join(lines) if lines else "（暂无商品与素材）"
 
 
 def decide(customer_id: str, inbound: str) -> dict[str, Any]:
@@ -143,6 +165,16 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "【拟人·别被看出是AI】像真人销售一样聊：禁用 AI 腔和八股套话（如“作为AI”“根据您的需求”"
             "“很高兴为您服务”“以下是”）；句子有长有短、口语化、可带少量语气词与（符合当地习惯的）表情；"
             "不堆砌专业术语、不一次说完所有点；有真人的节奏感。\n"
+            "【消息条数·动态决定】回复条数完全由你按当下情境决定，绝不固定：能一句说清就只发一条；"
+            "需要先回应再追问、或铺垫后给方案时，可拆成多条短消息；不要为凑数硬拆，也不要把该分开的"
+            "硬塞成一大段。该发素材时就把对应素材ID放进 send_asset，而不是干说。\n"
+            "【报价·动态且守住区间】若商品给了报价区间：默认从中位偏上开口，不要一上来就报底价；客户砍价"
+            "时要演足为难感（如“这个价我真做不了主，得帮你向上申请”“这已经是给你的最低了”），用赠品/"
+            "加量/账期等非降价方式先顶，逼不得已才小步让；**任何情况下都不得报出低于下限或高于上限的价**，"
+            "客户坚持要破底价就转人工、绝不自行答应。\n"
+            "【海外客户·外贸官】当客户在海外/跨境时，切换成专业外贸业务的口吻与流程：询盘确认→规格与"
+            "报价(含币种/贸易术语如FOB/CIF)→样品/认证→MOQ与起订→付款方式与账期→物流与交期，措辞像"
+            "常年做外贸的人，但仍守住上面所有红线与决策护栏。\n"
             "【销冠推进剧本·一步步把产品推出去】别被动接话，要有意识地按销冠节奏推进，但顺着客户"
             "当前状态走、不跳步、不硬逼：建立信任与亲和 → 挖掘并放大真实痛点(SPIN) → 把痛点/损失"
             "量化 → 给针对性方案与差异化价值 → 用具体价值或案例锚定(而非只甩价格) → 逐条化解异议 → "
@@ -159,7 +191,7 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "遇到这类决策点：先理解需求并给出选项/说明，但把最终拍板交回给客户，并将 handoff 置为 true 转人工。\n"
             "只输出一个 JSON 对象，字段："
             "cot(数组，每项含 role 和 thought，依次给出 记忆官/线索情报官/本地化官/策略官/隐私红线官/拟人化官 的思考)、"
-            "reply(string数组，要发出去的消息，【用客户的语言】，已按真人习惯拆成1-3条短消息、口语化、结尾带明确下一步)、"
+            "reply(string数组，要发出去的消息，【用客户的语言】，条数由你按情境动态决定[可1条可多条]、口语化、推动对话往前一步)、"
             "reply_translation(string数组，与 reply 一一对应的中文译文，供我方人员看懂；若 reply 本身就是中文则原文返回)、"
             "customer_lang(客户语言名称，如 English/日本語/Espa\u00f1ol/中文)、"
             "inbound_translation(客户最新消息的中文译文；若本是中文则原文返回)、"
@@ -180,7 +212,7 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             f"当前阶段：{customer.get('stage')} | 当前赢率：{customer.get('win_score')}\n"
             f"【客户记忆】\n{store.memory_block(customer_id)}\n"
             + (f"【AI 背调·公开企业情报】\n{_bg}\n" if (_bg := store.background_block(customer_id)) else "")
-            + f"【商品与可用素材】\n{_assets_summary(products)}\n"
+            + f"【商品·报价区间·可用素材】\n{_catalog_summary(products)}\n"
             f"【最近对话】\n{store.transcript(customer_id, limit=20)}\n"
             f"【客户最新消息】{inbound}\n\n"
             f"【可引用的方法论片段】\n{_evidence_block(evidence)}"
@@ -215,8 +247,13 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
     result.setdefault("handoff", False)
     result.setdefault("handoff_reason", "")
     result.setdefault("cited", cited_ids[:5])
-    # human-like send pacing (ms to wait before each message, with a typing indicator)
-    result["pacing"] = humanize.pacing(inbound, result["reply"], seed=len(store.transcript(customer_id)))
+    # human-like send pacing — read → think → type phases (UI shows each in turn)
+    _seed = len(store.transcript(customer_id))
+    plan = humanize.plan(inbound, result["reply"], seed=_seed)
+    result["pacing"] = humanize.pacing(inbound, result["reply"], seed=_seed)  # back-compat
+    result["read_ms"] = plan["read_ms"]
+    result["think_ms"] = plan["think_ms"]
+    result["type_ms"] = plan["type_ms"]
     result["evidence"] = evidence
     result["engine"] = "llm" if llm.llm_available() else "fallback"
     return result
@@ -236,7 +273,9 @@ def _validate_asset(asset_id: str, products: list[dict[str, Any]]) -> str:
 def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str, Any]]:
     """Persist a decision: send agent messages, update state, store new memory."""
     sent: list[dict[str, Any]] = []
-    asset_id = decision.get("send_asset", "")
+    # Re-validate the asset here too — an approved/edited decision must still
+    # obey the privacy red-line (only explicitly shareable assets go out).
+    asset_id = _validate_asset(decision.get("send_asset", ""), store.list_products())
     replies = decision.get("reply", [])
     trans = decision.get("reply_translation", [])
     lang = decision.get("customer_lang", "")

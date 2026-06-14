@@ -230,7 +230,15 @@ export interface Decision {
   handoff_reason: string;
   cited: string[];
   pacing?: number[];
+  read_ms?: number;
+  think_ms?: number;
+  type_ms?: number[];
   engine?: Engine;
+}
+
+export interface Settings {
+  mode: "auto" | "semi";
+  [k: string]: string;
 }
 
 export type StepStatus = "pending" | "running" | "done" | "skipped";

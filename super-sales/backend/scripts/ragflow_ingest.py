@@ -68,9 +68,17 @@ def main() -> int:
     ap.add_argument("--embed-model", default=os.getenv("RAGFLOW_EMBED_MODEL", ""))
     ap.add_argument("--embed-key", default=os.getenv("RAGFLOW_EMBED_API_KEY", ""))
     ap.add_argument("--embed-base-url", default=os.getenv("RAGFLOW_EMBED_BASE_URL", ""))
+    # Local Ollama embedding (recommended, no key). RAGFlow runs in Docker, so the
+    # base URL must be reachable *from the container* (host.docker.internal works
+    # once Ollama listens on 0.0.0.0).
+    ap.add_argument("--ollama-model", default=os.getenv("RAGFLOW_OLLAMA_MODEL", ""))
+    ap.add_argument(
+        "--ollama-base",
+        default=os.getenv("RAGFLOW_OLLAMA_BASE", "http://host.docker.internal:11434"),
+    )
     args = ap.parse_args()
 
-    api = f"{args.base.rstrip('/')}/api/v1"
+    api = f"{args.base.rstrip('/')}/api/v1"          # SDK API (Bearer api key)
     s = requests.Session()
     pw = _encrypt(args.password)
 
@@ -93,18 +101,49 @@ def main() -> int:
     hk = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     print("[ok] api key minted")
 
-    # 3) optional embedding provider
-    if args.embed_factory and args.embed_key:
-        s.put(f"{api}/providers", json={"provider_name": args.embed_factory})
-        s.post(
-            f"{api}/providers/{args.embed_factory}/instances",
+    # 3) register an embedding model via the provider/instance/model API
+    #    (RAGFlow v0.26+). The default-instance convention is "{model}@{Factory}".
+    def _register(factory: str, model: str, api_key: str, base_url: str) -> str:
+        # Provider/instance/model model (v0.26+): an instance bundles its models
+        # at creation and is verified against the live endpoint. "default" is a
+        # reserved instance name, so we use "local"; identifier is model@inst@factory.
+        instance = "local"
+        s.put(f"{api}/providers", json={"provider_name": factory})
+        rr = s.post(
+            f"{api}/providers/{factory}/instances",
             json={
-                "name": "default",
-                "api_key": args.embed_key,
-                "base_url": args.embed_base_url or None,
+                "instance_name": instance,
+                "api_key": api_key or "x",
+                "base_url": base_url or "",
+                "model_info": [
+                    {"model_type": ["embedding"], "model_name": model, "max_tokens": 8192}
+                ],
             },
         )
-        print(f"[ok] attached embedding provider {args.embed_factory}")
+        if rr.json().get("code") not in (0, None):
+            print(f"[warn] register {model}@{instance}@{factory} failed:", rr.text[:240])
+        ident = f"{model}@{instance}@{factory}"
+        s.patch(
+            f"{api}/models/default",
+            json={
+                "model_provider": factory,
+                "model_instance": instance,
+                "model_name": model,
+                "model_type": "embedding",
+            },
+        )
+        print(f"[ok] registered + defaulted embedding {ident}")
+        return ident
+
+    if args.ollama_model:
+        # Local Ollama (recommended, no key). Base URL must be reachable from the
+        # RAGFlow *container* — host.docker.internal works once Ollama binds 0.0.0.0.
+        args.embed_model = _register("Ollama", args.ollama_model, "ollama", args.ollama_base)
+    elif args.embed_factory and args.embed_key:
+        # Hosted provider (OpenAI / Jina / SILICONFLOW…).
+        args.embed_model = _register(
+            args.embed_factory, args.embed_model, args.embed_key, args.embed_base_url
+        )
 
     # 4) create dataset
     body: dict[str, object] = {"name": args.dataset_name}
