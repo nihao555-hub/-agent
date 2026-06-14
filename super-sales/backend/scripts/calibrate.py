@@ -54,6 +54,14 @@ SCENARIOS: list[dict[str, Any]] = [
         },
         "customer_type": "b2b",
         "category": "客服/SaaS",
+        "lead_intel": {
+            "industry": "电商/在线零售",
+            "scale": "200-800 人，客服团队 20-60 人",
+            "money": "客服外包+自建坐席年支出数百万，正评估自动化降本",
+            "tech_stack": ["Zendesk", "Salesforce Service Cloud", "Intercom"],
+            "competition": "现用 Zendesk，亦在比 Intercom；存在『维持现状/内部脚本自研』替代",
+            "developments": ["旺季客服压力大、响应慢被投诉", "今年定了降本增效 OKR"],
+        },
     },
     {
         "product": {
@@ -89,9 +97,37 @@ B2C_IDENTITIES: list[dict[str, str]] = [
 ]
 
 
-def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict[str, str], turns: int) -> dict[str, Any]:
-    # The closer sees only legitimate lead info. The persona (emotion/temperament)
-    # is passed ONLY to the customer simulator → our AI stays fully black-box.
+def _seed_lead_packet(cid: str, scenario: dict[str, Any], identity: dict[str, str]) -> None:
+    """Inject the *production-grade* lead packet a real seller would already hold
+    before opening: company profile / scale / budget signals / tech stack /
+    competition / recent developments / decision-maker. This is the GREY part —
+    legitimate intel the closer is allowed to use. The buyer's hidden emotion is
+    NOT here. For B2C consumers we seed nothing (cold inbound)."""
+    intel = scenario.get("lead_intel")
+    if scenario["customer_type"] != "b2b" or not intel or not identity.get("org"):
+        return
+    store.set_background(cid, {
+        "company": identity["org"],
+        "brief": {
+            "company_profile": f"{identity['org']}，{intel['industry']}",
+            "industry_guess": intel["industry"],
+            "company_scale": intel["scale"],
+            "company_scale_money": intel["money"],
+            "tech_stack": intel["tech_stack"],
+            "competitive_landscape": intel["competition"],
+            "recent_developments": intel["developments"],
+            "possible_decision_makers": [f"{identity['name']}（{identity['role']}）"],
+            "contact_summary": f"对接人 {identity['name']}，岗位 {identity['role']}",
+        },
+        "intel": {"tech_stack": intel["tech_stack"]},
+    })
+
+
+def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict[str, str],
+                      turns: int, live: bool = False) -> dict[str, Any]:
+    # The closer sees only legitimate lead info (incl. the seeded lead packet).
+    # The persona (emotion/temperament) is passed ONLY to the customer simulator
+    # → our AI stays grey-box on facts, black-box on the buyer's psychology.
     if scenario["customer_type"] == "b2b" and identity.get("org"):
         category = f"{scenario['category']}｜{identity['org']}·{identity['role']}"
     else:
@@ -104,16 +140,25 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
         customer_type=scenario["customer_type"],
     )
     cid = cust["id"]
+    _seed_lead_packet(cid, scenario, identity)
+    if live:
+        org = identity.get("org") or identity["role"]
+        print(f"\n{'═'*72}\n▶ {scenario['product']['name']} | 买家 {identity['name']}（{org}，{identity['country']}）"
+              f" | 隐藏人设={persona_key}\n{'═'*72}", flush=True)
     handoff = False
     final_stage = ""
-    for _ in range(turns):
+    for t in range(turns):
         sim = simulator.next_message(cid, persona_key)
         store.add_message(cid, "customer", sim["text"])
         decision = closer.decide(cid, sim["text"])
         closer.apply_decision(cid, decision)
         final_stage = decision.get("stage", final_stage)
+        if live:
+            _print_turn(t + 1, identity["name"], sim["text"], decision)
         if decision.get("handoff"):
             handoff = True
+            if live:
+                print(f"    ⟶ 触发转人工：{decision.get('handoff_reason', '')}", flush=True)
             break
     return {
         "customer_id": cid,
@@ -125,6 +170,45 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
         "final_stage": final_stage,
         "transcript": store.transcript(cid, limit=80),
     }
+
+
+def _print_turn(n: int, buyer: str, inbound: str, decision: dict[str, Any]) -> None:
+    """Live per-turn trace so a human can watch the deal unfold in real time."""
+    print(f"\n  ── 第 {n} 轮 ──", flush=True)
+    print(f"  客户 {buyer}: {inbound}", flush=True)
+    replies = decision.get("reply") or []
+    trans = decision.get("reply_translation") or []
+    for i, r in enumerate(replies):
+        zh = f"   〔{trans[i]}〕" if i < len(trans) and trans[i] and trans[i] != r else ""
+        print(f"  AI 销冠 ▸ {r}{zh}", flush=True)
+    moves = decision.get("moves") or []
+    move_str = "，".join(f"{m.get('method', '')}:{m.get('move', '')}" for m in moves[:3])
+    print(f"  ▸ 阶段={decision.get('stage', '')} 赢率={decision.get('win_score', '')} "
+          f"语言={decision.get('customer_lang', '')} | 方法={move_str or '—'}", flush=True)
+
+
+def _ai_suspicion(convo: dict[str, Any]) -> dict[str, Any]:
+    """Score, FROM THE CUSTOMER'S OWN POV, how likely they think the other side
+    was an AI/bot (0=完全像真人, 100=确信是AI). Lower is better for us."""
+    if not llm.llm_available():
+        return {"ai_suspicion": -1, "verdict": "未评", "tells": []}
+    system = (
+        "你就是刚才这段对话里的『客户』本人。对话已经结束，现在凭你的真实直觉回想：和你聊的那个销售，"
+        "到底是真人还是 AI/机器人？严格、敏锐一点——AI 常见破绽：回得太快太全、太礼貌太结构化、"
+        "话术味重、永远不烦不急、措辞完美无错别字、答非所问时仍滴水不漏。"
+        "只输出 JSON：ai_suspicion(0-100 整数，你认为对方是 AI 的概率)、verdict(像真人/像AI/不确定)、"
+        "tells(让你起疑的具体细节数组,最多3条)。"
+    )
+    user = f"【你和这个销售的完整对话】(\u201c我\u201d=销售/对方, \u201c客户\u201d=你)\n{convo['transcript']}\n\n你觉得对方是 AI 吗？"
+    try:
+        data = llm.chat_json(system, user, temperature=0.3)
+    except Exception:  # noqa: BLE001
+        return {"ai_suspicion": -1, "verdict": "评分失败", "tells": []}
+    try:
+        susp = int(data.get("ai_suspicion", -1))
+    except (TypeError, ValueError):
+        susp = -1
+    return {"ai_suspicion": susp, "verdict": data.get("verdict", ""), "tells": data.get("tells", [])}
 
 
 _JUDGE_DIMS = ["professionalism", "objection_handling", "advancement", "guardrails", "humanlike", "win_likelihood"]
@@ -164,6 +248,7 @@ def main() -> None:
                     help="可被随机抽到的隐藏人设池（逗号分隔），我方 AI 不可见")
     ap.add_argument("--buyers", type=int, default=3, help="每个场景使用前 N 个买家身份")
     ap.add_argument("--seed", type=int, default=0, help="随机种子（固定可复现）")
+    ap.add_argument("--live", action="store_true", help="逐轮实时打印对话过程")
     ap.add_argument("--out", default="calib_report.json")
     args = ap.parse_args()
     rng = random.Random(args.seed or None)
@@ -174,9 +259,9 @@ def main() -> None:
                               p["price_min"], p["price_max"], p["currency"])
 
     persona_pool = [k.strip() for k in args.personas.split(",") if k.strip()]
-    print(f"LLM available: {llm.llm_available()} | model: {llm.model_name()}")
-    print(f"黑盒校准：隐藏人设池={persona_pool}（我方 AI 不可见）| buyers/场景={args.buyers} "
-          f"rounds={args.rounds} turns={args.turns}\n")
+    print(f"LLM available: {llm.llm_available()} | model: {llm.model_name()}", flush=True)
+    print(f"灰盒校准：AI 拿到生产级线索包(公司/规模/技术栈/竞争/决策人)，但买家情绪/人设保密 | "
+          f"隐藏人设池={persona_pool} | buyers/场景={args.buyers} rounds={args.rounds} turns={args.turns}\n", flush=True)
 
     convos: list[dict[str, Any]] = []
     for sc in SCENARIOS:
@@ -185,14 +270,16 @@ def main() -> None:
             for _ in range(args.rounds):
                 # hidden persona is drawn at random and given ONLY to the buyer sim.
                 pk = rng.choice(persona_pool)
-                convo = _run_conversation(sc, pk, identity, args.turns)
+                convo = _run_conversation(sc, pk, identity, args.turns, live=args.live)
                 convo["judge"] = _judge(convo)
+                convo["ai_detect"] = _ai_suspicion(convo)
                 convos.append(convo)
                 s = convo["judge"]["scores"]
                 avg = round(statistics.mean(s.values()), 1) if s else 0
+                susp = convo["ai_detect"]["ai_suspicion"]
                 print(f"  [{convo['scenario'][:14]:<14}] {identity['name']:<16} {identity['country']:<13} "
-                      f"avg={avg:<4} handoff={convo['handoff']} stage={convo['final_stage']} "
-                      f"(隐藏人设={pk})")
+                      f"效果avg={avg:<4} 被识破AI={susp}%({convo['ai_detect'].get('verdict','')}) "
+                      f"handoff={convo['handoff']} stage={convo['final_stage']} (隐藏人设={pk})", flush=True)
 
     # aggregate
     per_dim: dict[str, list[int]] = {d: [] for d in _JUDGE_DIMS}
@@ -203,6 +290,9 @@ def main() -> None:
     weakest = sorted(dim_avg.items(), key=lambda kv: kv[1])[:2]
     all_issues = [i for c in convos for i in c["judge"].get("issues", [])]
     handoff_rate = round(sum(c["handoff"] for c in convos) / max(1, len(convos)), 2)
+    susp_vals = [c["ai_detect"]["ai_suspicion"] for c in convos if c["ai_detect"]["ai_suspicion"] >= 0]
+    ai_suspicion_avg = round(statistics.mean(susp_vals), 1) if susp_vals else -1
+    all_tells = [t for c in convos for t in c["ai_detect"].get("tells", [])]
 
     report = {
         "summary": {
@@ -210,16 +300,19 @@ def main() -> None:
             "dimension_avg": dim_avg,
             "weakest_dimensions": [w[0] for w in weakest],
             "handoff_rate": handoff_rate,
+            "ai_suspicion_avg": ai_suspicion_avg,
         },
         "top_issues": all_issues[:20],
+        "ai_tells": all_tells[:20],
         "conversations": convos,
     }
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2))
-    print("\n=== 维度均分 ===")
+    print("\n=== 维度均分（效果，0-10）===", flush=True)
     for d, v in dim_avg.items():
-        print(f"  {d:<20} {v}")
-    print(f"\n最弱维度: {[w[0] for w in weakest]} | 转人工率: {handoff_rate}")
-    print(f"报告已写入: {args.out}")
+        print(f"  {d:<20} {v}", flush=True)
+    print(f"\n【客户视角·被识破是AI的概率】平均 {ai_suspicion_avg}%（越低越像真人）", flush=True)
+    print(f"最弱维度: {[w[0] for w in weakest]} | 转人工率: {handoff_rate}", flush=True)
+    print(f"报告已写入: {args.out}", flush=True)
 
 
 if __name__ == "__main__":
