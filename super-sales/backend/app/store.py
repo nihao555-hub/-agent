@@ -121,6 +121,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("translation", "lang"):
         if col not in cols:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT DEFAULT ''")
+    ccols = {r["name"] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
+    if "customer_type" not in ccols:
+        conn.execute("ALTER TABLE customers ADD COLUMN customer_type TEXT DEFAULT 'b2b'")
     pcols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
     if "price_min" not in pcols:
         conn.execute("ALTER TABLE products ADD COLUMN price_min REAL")
@@ -151,14 +154,16 @@ def create_customer(
     platform: str = "sandbox",
     country: str = "",
     category: str = "",
+    customer_type: str = "b2b",
 ) -> dict[str, Any]:
     cid = _uid("cust")
     ts = _now()
+    ctype = "b2c" if str(customer_type).lower() == "b2c" else "b2b"
     with _lock:
         _connect().execute(
-            "INSERT INTO customers (id,name,platform,country,category,created_at,updated_at)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (cid, name, platform, country, category, ts, ts),
+            "INSERT INTO customers (id,name,platform,country,category,customer_type,created_at,updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (cid, name, platform, country, category, ctype, ts, ts),
         )
         _connect().commit()
     return get_customer(cid)  # type: ignore[return-value]
@@ -167,7 +172,7 @@ def create_customer(
 def update_customer(cid: str, **fields: Any) -> None:
     if not fields:
         return
-    allowed = {"name", "platform", "country", "category", "stage", "win_score", "status", "next_step", "tags"}
+    allowed = {"name", "platform", "country", "category", "customer_type", "stage", "win_score", "status", "next_step", "tags"}
     sets, vals = [], []
     for k, v in fields.items():
         if k not in allowed:
@@ -419,6 +424,17 @@ def background_block(customer_id: str) -> str:
         lines.append("近期动态：" + "；".join(brief["recent_developments"][:4]))
     if brief.get("possible_decision_makers"):
         lines.append("可能决策人：" + "、".join(brief["possible_decision_makers"][:4]))
+    if brief.get("contact_summary"):
+        lines.append(f"对接人画像：{brief['contact_summary']}")
+    contact = bg.get("contact") or {}
+    if contact.get("available") and contact.get("accounts"):
+        sites = "、".join(a.get("site", "") for a in contact["accounts"][:8] if a.get("site"))
+        if sites:
+            lines.append(f"对接人公开账号：{sites}")
+    if brief.get("icebreakers"):
+        lines.append("破冰话题：" + "；".join(brief["icebreakers"][:4]))
+    if brief.get("buying_triggers"):
+        lines.append("促单/采购信号：" + "；".join(brief["buying_triggers"][:4]))
     if brief.get("sales_angle"):
         lines.append(f"可切入的销售角度：{brief['sales_angle']}")
     if brief.get("talking_points"):

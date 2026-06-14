@@ -169,6 +169,7 @@ class CustomerCreate(BaseModel):
     platform: str = "sandbox"
     country: str = ""
     category: str = ""
+    customer_type: str = Field("b2b", description="b2b=顾问式；b2c=纯卖货(带货话术)")
 
 
 class InboundMessage(BaseModel):
@@ -224,7 +225,9 @@ def get_customers() -> dict[str, object]:
 
 @app.post("/api/customers")
 def post_customer(req: CustomerCreate) -> dict[str, object]:
-    return store.create_customer(req.name, req.platform, req.country, req.category)
+    return store.create_customer(
+        req.name, req.platform, req.country, req.category, req.customer_type
+    )
 
 
 @app.get("/api/customers/{cid}")
@@ -289,12 +292,16 @@ def post_approve(cid: str, req: ApproveRequest) -> dict[str, object]:
 class BackgroundRequest(BaseModel):
     company: str = Field("", description="公司名（留空则用客户名）")
     domain: str = Field("", description="公司主域名（可选，会明显提高质量）")
+    contact_name: str = Field("", description="对接人/决策人姓名（可选，触发人物公开调研）")
+    contact_email: str = Field("", description="对接人公司邮箱（可选）")
+    contact_username: str = Field("", description="对接人常用用户名（可选）")
+    customer_type: str = Field("", description="客户类型 b2b/b2c（留空用客户档案，默认 b2b）")
 
 
 @app.post("/api/customers/{cid}/background")
 def post_background(cid: str, req: BackgroundRequest) -> dict[str, object]:
-    """Run passive public company recon (theHarvester) + LLM brief, persist it,
-    and surface it as context for the closer. Public business info only."""
+    """Run public company + decision-maker OSINT + LLM brief, persist it, and
+    surface it as context for the closer. Public information only."""
     customer = store.get_customer(cid)
     if customer is None:
         return {"error": "customer not found"}
@@ -303,6 +310,10 @@ def post_background(cid: str, req: BackgroundRequest) -> dict[str, object]:
         req.domain,
         customer.get("country", ""),
         customer.get("lang", ""),
+        contact_name=req.contact_name,
+        contact_email=req.contact_email,
+        contact_username=req.contact_username,
+        customer_type=req.customer_type or customer.get("customer_type", "b2b"),
     )
     store.set_background(cid, result)
     return {"background": result, "available": background_check.available()}

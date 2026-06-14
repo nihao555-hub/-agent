@@ -149,11 +149,16 @@ export default function ChatConsole({
     setBackground(d.background ?? null);
   }
 
-  async function handleBackground() {
+  async function handleBackground(opts: {
+    domain?: string;
+    contact_name?: string;
+    contact_email?: string;
+    contact_username?: string;
+  } = {}) {
     if (!selectedId || bgBusy) return;
     setBgBusy(true);
     try {
-      const res = await runBackground(selectedId);
+      const res = await runBackground(selectedId, opts);
       setBackground(res.background);
     } finally {
       setBgBusy(false);
@@ -320,7 +325,7 @@ export default function ChatConsole({
                 customer={selected}
                 bgAvailable={bgAvailable}
                 bgBusy={bgBusy}
-                onBackground={() => void handleBackground()}
+                onBackground={(opts) => void handleBackground(opts)}
               />
               <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
                 {messages.length === 0 && (
@@ -588,10 +593,29 @@ function ChatHeader({
   customer: Customer;
   bgAvailable: boolean;
   bgBusy: boolean;
-  onBackground: () => void;
+  onBackground: (opts: {
+    domain?: string;
+    contact_name?: string;
+    contact_email?: string;
+    contact_username?: string;
+  }) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [domain, setDomain] = useState("");
+  const [cName, setCName] = useState("");
+  const [cEmail, setCEmail] = useState("");
+  const [cUser, setCUser] = useState("");
+  function run() {
+    onBackground({
+      domain: domain.trim(),
+      contact_name: cName.trim(),
+      contact_email: cEmail.trim(),
+      contact_username: cUser.trim(),
+    });
+    setOpen(false);
+  }
   return (
-    <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
+    <header className="relative flex items-center justify-between border-b border-line bg-surface px-6 py-3">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-bone text-charcoal">
           <IconUser width={18} height={18} />
@@ -600,6 +624,11 @@ function ChatHeader({
           <div className="flex items-center gap-2">
             <span className="text-[15px] text-ink">{customer.name}</span>
             <Badge tone="neutral">{PLATFORM_LABEL[customer.platform] ?? customer.platform}</Badge>
+            {customer.customer_type && (
+              <Badge tone={customer.customer_type === "b2c" ? "yellow" : "blue"}>
+                {customer.customer_type === "b2c" ? "C端·卖货" : "B端·顾问式"}
+              </Badge>
+            )}
             {customer.status === "handoff" && <Badge tone="red">待转人工</Badge>}
           </div>
           <div className="text-[11.5px] text-muted">
@@ -608,14 +637,38 @@ function ChatHeader({
         </div>
       </div>
       <div className="flex items-center gap-4 text-right">
-        <button
-          onClick={onBackground}
-          disabled={bgBusy || !bgAvailable}
-          title={bgAvailable ? "对公开企业信息做 AI 背调（theHarvester）" : "背调引擎未安装"}
-          className="flex items-center gap-1.5 rounded-lg border border-line bg-bone px-2.5 py-1.5 text-[12px] text-ink transition hover:bg-surface disabled:opacity-40"
-        >
-          <IconShield width={13} height={13} /> {bgBusy ? "背调中…" : "AI 背调"}
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            disabled={bgBusy || !bgAvailable}
+            title={bgAvailable ? "公司 + 决策人公开背调（Maigret/Blackbird/Holehe + 商业情报）" : "背调引擎未安装"}
+            className="flex items-center gap-1.5 rounded-lg border border-line bg-bone px-2.5 py-1.5 text-[12px] text-ink transition hover:bg-surface disabled:opacity-40"
+          >
+            <IconShield width={13} height={13} /> {bgBusy ? "背调中…" : "AI 背调"}
+          </button>
+          {open && !bgBusy && (
+            <div className="absolute right-0 z-20 mt-1 w-72 rounded-card border border-line bg-surface p-3 text-left shadow-lg">
+              <div className="mb-2 text-[11px] uppercase tracking-[0.05em] text-muted">
+                公司 + 决策人公开调研（选填）
+              </div>
+              <div className="space-y-2 text-[12px]">
+                <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="公司域名（如 acme.com）"
+                  className="w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-ink outline-none" />
+                <input value={cName} onChange={(e) => setCName(e.target.value)} placeholder="对接人/决策人姓名"
+                  className="w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-ink outline-none" />
+                <input value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="对接人公司邮箱"
+                  className="w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-ink outline-none" />
+                <input value={cUser} onChange={(e) => setCUser(e.target.value)} placeholder="对接人常用用户名"
+                  className="w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-ink outline-none" />
+              </div>
+              <div className="mt-2 flex justify-end gap-2">
+                <button onClick={() => setOpen(false)} className="rounded-md px-2 py-1 text-[12px] text-muted hover:text-ink">取消</button>
+                <button onClick={run} className="rounded-md bg-charcoal px-3 py-1 text-[12px] text-surface">开始背调</button>
+              </div>
+              <div className="mt-2 text-[10.5px] leading-4 text-muted">仅聚合公开信息用于正当销售尽调；留空也可只查公司。</div>
+            </div>
+          )}
+        </div>
         <div>
           <div className="text-[10.5px] uppercase tracking-[0.05em] text-muted">阶段</div>
           <div className="text-[13px] text-ink">{customer.stage}</div>
@@ -731,13 +784,23 @@ function BackgroundCard({ bg }: { bg: Background }) {
   const br = bg.brief ?? {};
   const hosts = bg.footprint?.hosts ?? [];
   const news = bg.intel?.news ?? [];
+  const contact = bg.contact;
+  const accounts = contact?.accounts ?? [];
+  const services = contact?.email_services ?? [];
   return (
     <div className="rounded-card border border-line bg-surface p-3.5">
       <div className="mb-2 flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.05em] text-muted">
-          <IconShield width={13} height={13} /> AI 背调 · 公开企业情报
+          <IconShield width={13} height={13} /> AI 背调 · 公司 + 决策人公开情报
         </span>
-        <Badge tone={bg.engine?.includes("business-intel") ? "green" : "yellow"}>{bg.engine}</Badge>
+        <div className="flex items-center gap-1">
+          {bg.customer_type && (
+            <Badge tone={bg.customer_type === "b2c" ? "yellow" : "blue"}>
+              {bg.customer_type === "b2c" ? "C端·卖货" : "B端·顾问式"}
+            </Badge>
+          )}
+          <Badge tone={bg.engine?.includes("business-intel") ? "green" : "yellow"}>{bg.engine}</Badge>
+        </div>
       </div>
       <div className="space-y-1.5 text-[12px] leading-5 text-ink">
         {(bg.company || bg.domain) && (
@@ -782,6 +845,50 @@ function BackgroundCard({ bg }: { bg: Background }) {
               <Badge key={i} tone="blue">{d}</Badge>
             ))}
           </div>
+        )}
+        {br.contact_summary && (
+          <div><span className="text-muted">对接人画像：</span>{br.contact_summary}</div>
+        )}
+        {(br.icebreakers?.length ?? 0) > 0 && (
+          <div className="pt-0.5">
+            <span className="text-muted">破冰话题：</span>
+            <ul className="ml-3 list-disc space-y-0.5">
+              {br.icebreakers!.slice(0, 4).map((t, i) => (
+                <li key={i} className="text-ink">{t}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {(br.buying_triggers?.length ?? 0) > 0 && (
+          <div className="pt-0.5">
+            <span className="text-muted">{bg.customer_type === "b2c" ? "促单触发点：" : "采购/合作信号："}</span>
+            <ul className="ml-3 list-disc space-y-0.5">
+              {br.buying_triggers!.slice(0, 4).map((t, i) => (
+                <li key={i} className="text-ink">{t}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {contact?.available && (accounts.length > 0 || services.length > 0) && (
+          <details className="pt-0.5 text-[11px] text-muted">
+            <summary className="cursor-pointer">
+              对接人公开足迹 · {accounts.length} 账号{services.length ? ` · ${services.length} 邮箱服务` : ""}
+              {contact.engines?.length ? `（${contact.engines.join("/")}）` : ""}
+            </summary>
+            {accounts.length > 0 && (
+              <div className="ml-1 mt-1 flex flex-wrap gap-1">
+                {accounts.slice(0, 16).map((a, i) =>
+                  a.url ? (
+                    <a key={i} href={a.url} target="_blank" rel="noreferrer" className="text-ink underline">
+                      {a.site}
+                    </a>
+                  ) : (
+                    <span key={i} className="text-ink">{a.site}</span>
+                  ),
+                )}
+              </div>
+            )}
+          </details>
         )}
         {news.length > 0 && (
           <details className="pt-0.5 text-[11px] text-muted">
@@ -977,13 +1084,14 @@ function NewCustomerModal({
   const [platform, setPlatform] = useState(channels[0]?.name ?? "sandbox");
   const [country, setCountry] = useState("");
   const [category, setCategory] = useState("");
+  const [customerType, setCustomerType] = useState("b2b");
   const [saving, setSaving] = useState(false);
 
   async function submit() {
     if (!name.trim() || saving) return;
     setSaving(true);
     try {
-      const c = await createCustomer({ name: name.trim(), platform, country, category });
+      const c = await createCustomer({ name: name.trim(), platform, country, category, customer_type: customerType });
       onCreated(c);
     } finally {
       setSaving(false);
@@ -1041,6 +1149,16 @@ function NewCustomerModal({
               />
             </Field>
           </div>
+          <Field label="客户类型（决定销售风格）">
+            <select
+              value={customerType}
+              onChange={(e) => setCustomerType(e.target.value)}
+              className="w-full rounded-md border border-line bg-bone/40 px-3 py-2 text-[13px] text-ink outline-none focus:border-charcoal"
+            >
+              <option value="b2b">B 端企业·顾问式销售（背调/痛点/ROI/MEDDIC）</option>
+              <option value="b2c">C 端消费者·纯卖货（带货/激发购买欲）</option>
+            </select>
+          </Field>
         </div>
         <footer className="flex justify-end gap-2 border-t border-line px-5 py-3">
           <button onClick={onClose} className="rounded-lg px-3.5 py-2 text-[13px] text-charcoal hover:bg-bone">

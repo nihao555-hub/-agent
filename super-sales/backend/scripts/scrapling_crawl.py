@@ -40,33 +40,67 @@ from urllib.parse import urljoin, urlparse
 
 _UA = "SuperSalesKnowledgeBot/1.0 (+internal sales research; respects robots.txt)"
 
-# Curated public sales-knowledge seeds (verified to exist; CC BY-SA encyclopedic
-# coverage of the core "novice → top closer" methodology surface).
-BUILTIN_SEEDS: list[str] = [
+# Curated public sales-knowledge seeds covering the "novice → top closer" surface.
+# We fetch ONLY robots-permitted pages and keep source attribution (internal use).
+#
+# 1) Recognized global sales-training blogs / resource hubs.
+_GLOBAL_SEEDS: list[str] = [
+    "https://blog.hubspot.com/sales",
+    "https://blog.close.com/",
+    "https://www.saleshacker.com/",
+    "https://www.rainsalestraining.com/blog",
+    "https://www.sandler.com/blog/",
+    "https://challengerinc.com/blog/",
+    "https://www.gong.io/blog/",
+    "https://meddic.academy/blog/",
+    "https://www.salesgravy.com/blog/",
+    "https://www.briantracy.com/blog/",
+    "https://grantcardone.com/blogs/business",
+]
+
+# 2) Public encyclopedic coverage of the core methodology (CC BY-SA).
+_WIKI_SEEDS: list[str] = [
     "https://en.wikipedia.org/wiki/Sales",
     "https://en.wikipedia.org/wiki/Sales_process",
     "https://en.wikipedia.org/wiki/Solution_selling",
     "https://en.wikipedia.org/wiki/The_Challenger_Sale",
     "https://en.wikipedia.org/wiki/Closing_(sales)",
     "https://en.wikipedia.org/wiki/Cold_calling",
-    "https://en.wikipedia.org/wiki/Upselling",
     "https://en.wikipedia.org/wiki/Sales_management",
-    "https://en.wikipedia.org/wiki/Lead_generation",
     "https://en.wikipedia.org/wiki/Value_proposition",
     "https://en.wikipedia.org/wiki/Negotiation",
     "https://en.wikipedia.org/wiki/Persuasion",
     "https://en.wikipedia.org/wiki/Robert_Cialdini",
     "https://en.wikipedia.org/wiki/AIDA_(marketing)",
     "https://en.wikipedia.org/wiki/Buyer_decision_process",
-    "https://en.wikipedia.org/wiki/Customer_relationship_management",
     "https://en.wikipedia.org/wiki/Account-based_marketing",
 ]
 
-# Anchor text that marks a link worth following in --crawl mode.
+# 3) China public top sources — expert-curated, robots-friendly business
+#    encyclopedia (MBA智库百科) covering 如何成为销冠 / 顾问式销售 / 大客户销售.
+_CHINA_SEEDS: list[str] = [
+    "https://wiki.mbalib.com/wiki/销售",
+    "https://wiki.mbalib.com/wiki/销售技巧",
+    "https://wiki.mbalib.com/wiki/顾问式销售",
+    "https://wiki.mbalib.com/wiki/SPIN销售法",
+    "https://wiki.mbalib.com/wiki/大客户销售",
+    "https://wiki.mbalib.com/wiki/销售流程",
+    "https://wiki.mbalib.com/wiki/销售漏斗",
+    "https://wiki.mbalib.com/wiki/客户关系管理",
+    "https://wiki.mbalib.com/wiki/商务谈判",
+    "https://wiki.mbalib.com/wiki/销售管理",
+    "https://wiki.mbalib.com/wiki/成交",
+    "https://wiki.mbalib.com/wiki/客户异议",
+    "https://wiki.mbalib.com/wiki/电话销售",
+]
+
+BUILTIN_SEEDS: list[str] = _GLOBAL_SEEDS + _WIKI_SEEDS + _CHINA_SEEDS
+
+# Anchor text that marks a link worth following in --crawl mode (EN + 中文).
 _RELEVANT = re.compile(
     r"sell|sales|selling|negotiat|persuas|custom|buyer|closing|prospect|"
-    r"objection|pipeline|marketing|influence|deal|account|lead|pitch|crm",
-    re.I,
+    r"objection|pipeline|marketing|influence|deal|account|lead|pitch|crm|"
+    r"销售|销冠|成交|谈判|客户|话术|拜访|大客户|顾问式|异议|逼单|跟进|商机",
 )
 _CHUNK = 900  # target characters per knowledge chunk
 

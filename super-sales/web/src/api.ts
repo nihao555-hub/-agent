@@ -28,6 +28,7 @@ export async function createCustomer(body: {
   platform: string;
   country?: string;
   category?: string;
+  customer_type?: string;
 }): Promise<Customer> {
   const r = await fetch("/api/customers", {
     method: "POST",
@@ -46,13 +47,19 @@ export async function getCustomer(
 
 export async function runBackground(
   id: string,
-  company = "",
-  domain = "",
+  opts: {
+    company?: string;
+    domain?: string;
+    contact_name?: string;
+    contact_email?: string;
+    contact_username?: string;
+    customer_type?: string;
+  } = {},
 ): Promise<{ background: Background; available: boolean }> {
   const r = await fetch(`/api/customers/${id}/background`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company, domain }),
+    body: JSON.stringify(opts),
   });
   return r.json();
 }

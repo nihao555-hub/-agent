@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .env
 
+# crawler raw output (the merged retriever corpus lives in backend/app/data/)
+backend/crawled_knowledge.jsonl
+
 # local durable store (SQLite)
 backend/data/
 *.db

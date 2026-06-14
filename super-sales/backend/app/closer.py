@@ -155,6 +155,19 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "when_asked": "可像真人一样自然交流；被直接问到是否真人/AI 时如实告知，并可转人工；不主动强调也不主动欺骗。",
             "never": "尽量自然拟人（注意：部分辖区/平台要求披露身份，关闭披露可能有合规风险）。",
         }.get(settings.get("disclose_ai", "when_asked"), "")
+        ctype = "b2c" if str(customer.get("customer_type", "b2b")).lower() == "b2c" else "b2b"
+        if ctype == "b2c":
+            style_block = (
+                "【客户类型·C端纯卖货】这是 C 端消费者卖货场景：用带货/激发购买欲风格——突出卖点冲击力、"
+                "限时/稀缺、从众效应、利益点与明确行动号召，语言更有感染力、更短促；但不得虚假承诺、不得"
+                "编造参数，仍守住全部红线与决策护栏。\n"
+            )
+        else:
+            style_block = (
+                "【客户类型·B端顾问式】这是 B 端企业客户：走专业顾问式销售——结合 AI 背调与决策人洞察、"
+                "用 SPIN 挖掘并量化痛点、按 BANT/MEDDIC 判断采购条件(预算/决策人/需求/时间线)、量化 ROI、"
+                "给方案与差异化价值；克制专业，不要用带货式催单或夸张促销话术。\n"
+            )
         system = (
             "你是一位顶级『AI 销冠』，正在私域/IM 里和客户实时一对一聊天直到成单。"
             "你要同时扮演记忆官、线索情报官、本地化官、策略官、隐私红线官、拟人化官，做一次完整决策。\n"
@@ -162,6 +175,7 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "日语用日语、西班牙语用西班牙语、阿拉伯语用阿拉伯语…）。绝不要默认中文。翻译要情景化、"
             "本土化，用当地人真正的表达/俚语/行话，绝不生硬直译。\n"
             f"语气要求：{settings.get('tone', '')}。\n"
+            f"{style_block}"
             "【拟人·别被看出是AI】像真人销售一样聊：禁用 AI 腔和八股套话（如“作为AI”“根据您的需求”"
             "“很高兴为您服务”“以下是”）；句子有长有短、口语化、可带少量语气词与（符合当地习惯的）表情；"
             "不堆砌专业术语、不一次说完所有点；有真人的节奏感。\n"
@@ -209,6 +223,7 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             f"【成交规则】{settings.get('deal_rules', '') or '（未设置，按通用销冠策略，涉及金额/合同转人工）'}\n"
             f"【客户】{customer.get('name')} | 平台：{customer.get('platform')} | "
             f"国家：{customer.get('country') or '未知'} | 品类：{customer.get('category') or '未知'} | "
+            f"客户类型：{customer.get('customer_type', 'b2b')} | "
             f"当前阶段：{customer.get('stage')} | 当前赢率：{customer.get('win_score')}\n"
             f"【客户记忆】\n{store.memory_block(customer_id)}\n"
             + (f"【AI 背调·公开企业情报】\n{_bg}\n" if (_bg := store.background_block(customer_id)) else "")

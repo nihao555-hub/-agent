@@ -154,6 +154,7 @@ export interface Customer {
   platform: string;
   country: string;
   category: string;
+  customer_type?: string;
   stage: string;
   win_score: number;
   status: string;
@@ -180,9 +181,29 @@ export interface BackgroundBrief {
   footprint_summary?: string;
   recent_developments?: string[];
   possible_decision_makers?: string[];
+  contact_summary?: string;
+  icebreakers?: string[];
   talking_points?: string[];
+  buying_triggers?: string[];
   sales_angle?: string;
   caution?: string;
+}
+
+export interface ContactAccount {
+  site: string;
+  url?: string;
+  tags?: string;
+}
+
+export interface ContactOsint {
+  available?: boolean;
+  name?: string;
+  email?: string;
+  username?: string;
+  accounts?: ContactAccount[];
+  account_count?: number;
+  email_services?: string[];
+  engines?: string[];
 }
 
 export interface NewsItem {
@@ -203,8 +224,10 @@ export interface Background {
   company: string;
   domain: string;
   country?: string;
+  customer_type?: string;
   footprint?: { hosts?: string[]; emails?: string[]; ips?: string[]; available?: boolean };
   intel?: BusinessIntel;
+  contact?: ContactOsint;
   brief?: BackgroundBrief;
   engine?: string;
 }
