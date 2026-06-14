@@ -302,6 +302,7 @@ def post_background(cid: str, req: BackgroundRequest) -> dict[str, object]:
         req.company or customer.get("name", ""),
         req.domain,
         customer.get("country", ""),
+        customer.get("lang", ""),
     )
     store.set_background(cid, result)
     return {"background": result, "available": background_check.available()}

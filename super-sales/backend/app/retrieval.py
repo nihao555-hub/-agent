@@ -10,6 +10,7 @@ Both backends expose the same `search(query, k)` returning citable snippets.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -18,6 +19,38 @@ from functools import lru_cache
 from typing import Any
 
 from .knowledge import PLAYBOOK
+
+# Crawled public sales knowledge (scripts/scrapling_crawl.py --merge-playbook)
+# is folded into the corpus at startup so it is actually used by retrieval.
+_CRAWLED_PATH = os.path.join(os.path.dirname(__file__), "data", "crawled_knowledge.jsonl")
+
+
+def _load_corpus() -> list[dict[str, str]]:
+    """PLAYBOOK + any crawled public-knowledge entries on disk (deduped by id)."""
+    corpus = list(PLAYBOOK)
+    seen = {d["id"] for d in corpus}
+    if os.path.exists(_CRAWLED_PATH):
+        with open(_CRAWLED_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("id") and entry["id"] not in seen and entry.get("text"):
+                    seen.add(entry["id"])
+                    corpus.append(
+                        {
+                            "id": entry["id"],
+                            "topic": entry.get("topic", "公开销售知识"),
+                            "title": entry.get("title", ""),
+                            "text": entry["text"],
+                            "source": entry.get("source", ""),
+                        }
+                    )
+    return corpus
 
 
 def _tokenize(text: str) -> list[str]:
@@ -159,13 +192,14 @@ class _RagflowRetriever:
 
 @lru_cache(maxsize=1)
 def _fallback_retriever() -> Any:
+    corpus = _load_corpus()
     try:
         from fastembed import TextEmbedding  # type: ignore
 
         model = TextEmbedding(model_name="BAAI/bge-small-zh-v1.5")
-        return _EmbeddingRetriever(PLAYBOOK, model)
+        return _EmbeddingRetriever(corpus, model)
     except Exception:  # noqa: BLE001 — any failure → deterministic fallback
-        return _TfidfRetriever(PLAYBOOK)
+        return _TfidfRetriever(corpus)
 
 
 @lru_cache(maxsize=1)

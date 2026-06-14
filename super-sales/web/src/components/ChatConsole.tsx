@@ -730,13 +730,14 @@ function StageRail({ stages, current }: { stages: string[]; current: string }) {
 function BackgroundCard({ bg }: { bg: Background }) {
   const br = bg.brief ?? {};
   const hosts = bg.footprint?.hosts ?? [];
+  const news = bg.intel?.news ?? [];
   return (
     <div className="rounded-card border border-line bg-surface p-3.5">
       <div className="mb-2 flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.05em] text-muted">
           <IconShield width={13} height={13} /> AI 背调 · 公开企业情报
         </span>
-        <Badge tone={bg.engine === "theHarvester" ? "green" : "yellow"}>{bg.engine}</Badge>
+        <Badge tone={bg.engine?.includes("business-intel") ? "green" : "yellow"}>{bg.engine}</Badge>
       </div>
       <div className="space-y-1.5 text-[12px] leading-5 text-ink">
         {(bg.company || bg.domain) && (
@@ -745,8 +746,12 @@ function BackgroundCard({ bg }: { bg: Background }) {
             {bg.domain && <span className="ml-1 font-mono text-[11px]">· {bg.domain}</span>}
           </div>
         )}
+        {br.company_profile && <div>{br.company_profile}</div>}
         {br.industry_guess && (
-          <div><span className="text-muted">行业推测：</span>{br.industry_guess}</div>
+          <div><span className="text-muted">行业：</span>{br.industry_guess}</div>
+        )}
+        {br.company_scale && (
+          <div><span className="text-muted">规模：</span>{br.company_scale}</div>
         )}
         {br.footprint_summary && (
           <div><span className="text-muted">公开足迹：</span>{br.footprint_summary}</div>
@@ -761,12 +766,35 @@ function BackgroundCard({ bg }: { bg: Background }) {
             ))}
           </ul>
         )}
+        {(br.recent_developments?.length ?? 0) > 0 && (
+          <div className="pt-0.5">
+            <span className="text-muted">近期动态：</span>
+            <ul className="ml-3 list-disc space-y-0.5">
+              {br.recent_developments!.slice(0, 4).map((d, i) => (
+                <li key={i} className="text-ink">{d}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {(br.possible_decision_makers?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1 pt-0.5">
             {br.possible_decision_makers!.slice(0, 5).map((d, i) => (
               <Badge key={i} tone="blue">{d}</Badge>
             ))}
           </div>
+        )}
+        {news.length > 0 && (
+          <details className="pt-0.5 text-[11px] text-muted">
+            <summary className="cursor-pointer">公开新闻 {news.length} 条</summary>
+            <ul className="ml-3 mt-1 list-disc space-y-0.5">
+              {news.slice(0, 5).map((n, i) => (
+                <li key={i} className="text-ink">
+                  {n.title}
+                  {n.source && <span className="text-muted"> · {n.source}</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
         {hosts.length > 0 && (
           <div className="pt-0.5 text-[11px] text-muted">公开子域 {hosts.length} 个</div>

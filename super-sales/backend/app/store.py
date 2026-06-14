@@ -407,10 +407,18 @@ def background_block(customer_id: str) -> str:
     if bg.get("domain"):
         lines.append(f"域名：{bg['domain']}")
     brief = bg.get("brief") or {}
+    if brief.get("company_profile"):
+        lines.append(f"公司画像：{brief['company_profile']}")
     if brief.get("industry_guess"):
-        lines.append(f"推测行业：{brief['industry_guess']}")
+        lines.append(f"行业：{brief['industry_guess']}")
+    if brief.get("company_scale"):
+        lines.append(f"规模：{brief['company_scale']}")
     if brief.get("footprint_summary"):
         lines.append(f"公开足迹：{brief['footprint_summary']}")
+    if brief.get("recent_developments"):
+        lines.append("近期动态：" + "；".join(brief["recent_developments"][:4]))
+    if brief.get("possible_decision_makers"):
+        lines.append("可能决策人：" + "、".join(brief["possible_decision_makers"][:4]))
     if brief.get("sales_angle"):
         lines.append(f"可切入的销售角度：{brief['sales_angle']}")
     if brief.get("talking_points"):

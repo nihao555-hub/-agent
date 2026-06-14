@@ -174,12 +174,29 @@ export interface ChatMessage {
 }
 
 export interface BackgroundBrief {
+  company_profile?: string;
   industry_guess?: string;
+  company_scale?: string;
   footprint_summary?: string;
+  recent_developments?: string[];
   possible_decision_makers?: string[];
   talking_points?: string[];
   sales_angle?: string;
   caution?: string;
+}
+
+export interface NewsItem {
+  title: string;
+  date?: string;
+  source?: string;
+}
+
+export interface BusinessIntel {
+  wikidata?: Record<string, string>;
+  summary?: string;
+  news?: NewsItem[];
+  site_blurb?: string;
+  available?: boolean;
 }
 
 export interface Background {
@@ -187,6 +204,7 @@ export interface Background {
   domain: string;
   country?: string;
   footprint?: { hosts?: string[]; emails?: string[]; ips?: string[]; available?: boolean };
+  intel?: BusinessIntel;
   brief?: BackgroundBrief;
   engine?: string;
 }

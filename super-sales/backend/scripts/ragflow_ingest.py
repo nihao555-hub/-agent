@@ -40,7 +40,7 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.knowledge import PLAYBOOK  # noqa: E402
+from app.retrieval import _load_corpus  # noqa: E402  (PLAYBOOK + crawled public knowledge)
 
 RAGFLOW_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArq9XTUSeYr2+N1h3Afl/
@@ -176,13 +176,15 @@ def main() -> int:
             doc_ids.append(d["id"])
         batch.clear()
 
-    for e in PLAYBOOK:
-        content = f"# [{e['id']}] {e['title']}（{e['topic']}）\n\n{e['text']}\n".encode()
+    corpus = _load_corpus()
+    for e in corpus:
+        src = f"\n\n> 来源：{e['source']}" if e.get("source") else ""
+        content = f"# [{e['id']}] {e['title']}（{e['topic']}）\n\n{e['text']}{src}\n".encode()
         batch.append(("file", (f"{e['id']}.md", content, "text/markdown")))
         if len(batch) >= 20:
             flush()
     flush()
-    print(f"[ok] uploaded {len(doc_ids)} docs")
+    print(f"[ok] uploaded {len(doc_ids)} docs (PLAYBOOK + crawled public knowledge)")
 
     if doc_ids:
         requests.post(f"{api}/datasets/{dataset_id}/documents/parse", headers=hk, json={"document_ids": doc_ids})
