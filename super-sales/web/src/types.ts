@@ -189,6 +189,8 @@ export interface BackgroundBrief {
   competitive_landscape?: string;
   buying_triggers?: string[];
   sales_angle?: string;
+  qualification_framework?: string;
+  qualification_gaps?: string[];
   caution?: string;
 }
 

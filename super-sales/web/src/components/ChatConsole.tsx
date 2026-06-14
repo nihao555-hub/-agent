@@ -849,6 +849,17 @@ function BackgroundCard({ bg }: { bg: Background }) {
         {br.sales_angle && (
           <div><span className="text-muted">切入角度：</span>{br.sales_angle}</div>
         )}
+        {br.qualification_framework && (
+          <div><span className="text-muted">资格框架：</span>{br.qualification_framework}</div>
+        )}
+        {(br.qualification_gaps?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-muted">待确认维度：</span>
+            {br.qualification_gaps!.slice(0, 6).map((g, i) => (
+              <Badge key={i} tone="yellow">{g}</Badge>
+            ))}
+          </div>
+        )}
         {(br.talking_points?.length ?? 0) > 0 && (
           <ul className="ml-3 list-disc space-y-0.5 text-muted">
             {br.talking_points!.slice(0, 4).map((t, i) => (

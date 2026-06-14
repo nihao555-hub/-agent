@@ -450,6 +450,10 @@ def background_block(customer_id: str) -> str:
         lines.append("促单/采购信号：" + "；".join(brief["buying_triggers"][:4]))
     if brief.get("sales_angle"):
         lines.append(f"可切入的销售角度：{brief['sales_angle']}")
+    if brief.get("qualification_framework"):
+        lines.append(f"建议资格框架：{brief['qualification_framework']}")
+    if brief.get("qualification_gaps"):
+        lines.append("需对话补齐的资格维度：" + "、".join(brief["qualification_gaps"][:6]))
     if brief.get("talking_points"):
         lines.append("可用话题：" + "；".join(brief["talking_points"][:4]))
     if brief.get("caution"):

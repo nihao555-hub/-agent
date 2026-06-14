@@ -165,8 +165,12 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
         else:
             style_block = (
                 "【客户类型·B端顾问式】这是 B 端企业客户：走专业顾问式销售——结合 AI 背调与决策人洞察、"
-                "用 SPIN 挖掘并量化痛点、按 BANT/MEDDIC 判断采购条件(预算/决策人/需求/时间线)、量化 ROI、"
-                "给方案与差异化价值；克制专业，不要用带货式催单或夸张促销话术。\n"
+                "用 SPIN 挖掘并量化痛点、量化 ROI、给方案与差异化价值；克制专业，不要用带货式催单或夸张促销话术。\n"
+                "【资格框架·按场景选对框架，别只会 BANT】先判断商机体量再选框架，并在 cot 与 moves 里点明用的是哪套："
+                "线索初筛/小单/短周期→CHAMP(Challenges/Authority/Money/Prioritization，从挑战切入而非先问预算)；"
+                "SaaS/中腰部→SPICED(Situation/Pain/Impact 量化损失/Critical Event 关键事件/Decision，痛点影响够大客户会创造预算)；"
+                "百万级大单/多决策人/长周期→MEDDPICC(在 MEDDIC 上补 Paper Process 合规采购流程 与 Competition 含维持现状/自研等替代方案)。"
+                "顶尖打法可组合：前端 SPICED 挖价值、进入正式商机后切 MEDDPICC 管控风险。对每个缺失维度主动设计一个推进问题去补齐(避免查户口式连环问)。\n"
             )
         system = (
             "你是一位顶级『AI 销冠』，正在私域/IM 里和客户实时一对一聊天直到成单。"

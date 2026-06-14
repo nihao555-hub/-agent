@@ -140,7 +140,11 @@ def _brief(
         )
         extra_fields = (
             "buying_triggers(可能的采购/合作信号数组)、"
-            "sales_angle(最可能打动该公司的顾问式销售切入角度，结合其痛点与 ROI)"
+            "sales_angle(最可能打动该公司的顾问式销售切入角度，结合其痛点与 ROI)、"
+            "qualification_framework(根据公司体量/类型推荐的资格框架：小单/初筛→CHAMP，"
+            "SaaS/中腰部→SPICED，百万级大单/多决策人→MEDDPICC，给出框架名+一句理由)、"
+            "qualification_gaps(按推荐框架，目前公开信息还无法确认、需要在对话中补齐的关键维度数组，"
+            "如 经济买家/决策流程/关键事件/竞争态势/合规采购流程)"
         )
     system = (
         f"{role} 只用公开商业信息，绝不编造具体隐私数据，不确定就标注'推测'。"
