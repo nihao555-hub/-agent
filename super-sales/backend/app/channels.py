@@ -8,14 +8,20 @@ API, LINE Messaging API, WeCom) plug into the same interface once the user
 provides credentials via environment variables.
 
 Configuration is read from env so nothing secret is committed:
-  * WhatsApp : WHATSAPP_TOKEN, WHATSAPP_PHONE_ID
-  * LINE     : LINE_CHANNEL_TOKEN
-  * WeCom    : WECOM_CORP_ID, WECOM_SECRET, WECOM_AGENT_ID
+  * WhatsApp : WHATSAPP_TOKEN, WHATSAPP_PHONE_ID   (optional WHATSAPP_API_BASE)
+  * LINE     : LINE_CHANNEL_TOKEN                   (optional LINE_API_BASE)
+  * WeCom    : WECOM_CORP_ID, WECOM_SECRET, WECOM_AGENT_ID (optional WECOM_API_BASE)
+
+Each real platform's ``send`` is fully implemented against the official HTTP API,
+and the ``*_API_BASE`` overrides let you point the same adapter at a compliant
+third-party gateway without code changes. Delivery is gated purely on whether the
+credentials are present.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Protocol
 
 
@@ -77,6 +83,28 @@ class WhatsAppChannel(_EnvChannel):
     risk = "official"
     required_env = ("WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID")
 
+    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+        if not self.is_configured():
+            return super().send(to, messages, asset_id)
+        import requests
+
+        base = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com/v20.0").rstrip("/")
+        url = f"{base}/{os.environ['WHATSAPP_PHONE_ID']}/messages"
+        headers = {"Authorization": f"Bearer {os.environ['WHATSAPP_TOKEN']}"}
+        delivered = 0
+        for msg in messages:
+            r = requests.post(
+                url,
+                headers=headers,
+                json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": msg}},
+                timeout=15,
+            )
+            if r.ok:
+                delivered += 1
+            else:
+                return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
+        return {"ok": True, "channel": self.name, "delivered": delivered}
+
 
 class LineChannel(_EnvChannel):
     name = "line"
@@ -84,12 +112,81 @@ class LineChannel(_EnvChannel):
     risk = "official"
     required_env = ("LINE_CHANNEL_TOKEN",)
 
+    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+        if not self.is_configured():
+            return super().send(to, messages, asset_id)
+        import requests
+
+        base = os.getenv("LINE_API_BASE", "https://api.line.me").rstrip("/")
+        headers = {"Authorization": f"Bearer {os.environ['LINE_CHANNEL_TOKEN']}"}
+        # LINE push accepts up to 5 message objects per call.
+        delivered = 0
+        for i in range(0, len(messages), 5):
+            chunk = messages[i : i + 5]
+            r = requests.post(
+                f"{base}/v2/bot/message/push",
+                headers=headers,
+                json={"to": to, "messages": [{"type": "text", "text": m} for m in chunk]},
+                timeout=15,
+            )
+            if r.ok:
+                delivered += len(chunk)
+            else:
+                return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
+        return {"ok": True, "channel": self.name, "delivered": delivered}
+
 
 class WeComChannel(_EnvChannel):
     name = "wecom"
     label = "企业微信 WeCom（官方）"
     risk = "official"
     required_env = ("WECOM_CORP_ID", "WECOM_SECRET", "WECOM_AGENT_ID")
+
+    _token: tuple[str, float] = ("", 0.0)
+
+    def _access_token(self, base: str) -> str:
+        import requests
+
+        tok, exp = self._token
+        if tok and time.time() < exp:
+            return tok
+        r = requests.get(
+            f"{base}/cgi-bin/gettoken",
+            params={"corpid": os.environ["WECOM_CORP_ID"], "corpsecret": os.environ["WECOM_SECRET"]},
+            timeout=15,
+        )
+        data = r.json()
+        tok = data.get("access_token", "")
+        self._token = (tok, time.time() + data.get("expires_in", 7200) - 120)
+        return tok
+
+    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+        if not self.is_configured():
+            return super().send(to, messages, asset_id)
+        import requests
+
+        base = os.getenv("WECOM_API_BASE", "https://qyapi.weixin.qq.com").rstrip("/")
+        token = self._access_token(base)
+        if not token:
+            return {"ok": False, "channel": self.name, "error": "获取 WeCom access_token 失败"}
+        delivered = 0
+        for msg in messages:
+            r = requests.post(
+                f"{base}/cgi-bin/message/send",
+                params={"access_token": token},
+                json={
+                    "touser": to,
+                    "msgtype": "text",
+                    "agentid": os.environ["WECOM_AGENT_ID"],
+                    "text": {"content": msg},
+                },
+                timeout=15,
+            )
+            if r.ok and r.json().get("errcode") == 0:
+                delivered += 1
+            else:
+                return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
+        return {"ok": True, "channel": self.name, "delivered": delivered}
 
 
 _REGISTRY: dict[str, Any] = {
