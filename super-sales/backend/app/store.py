@@ -56,6 +56,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             platform TEXT NOT NULL DEFAULT 'sandbox',
             country TEXT DEFAULT '',
             category TEXT DEFAULT '',
+            external_id TEXT DEFAULT '',   -- platform-side chat/user id for inbound routing & delivery
             stage TEXT DEFAULT '认知',
             win_score INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active',
@@ -124,6 +125,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ccols = {r["name"] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
     if "customer_type" not in ccols:
         conn.execute("ALTER TABLE customers ADD COLUMN customer_type TEXT DEFAULT 'b2b'")
+    if "external_id" not in ccols:
+        conn.execute("ALTER TABLE customers ADD COLUMN external_id TEXT DEFAULT ''")
     pcols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
     if "price_min" not in pcols:
         conn.execute("ALTER TABLE products ADD COLUMN price_min REAL")
@@ -155,24 +158,37 @@ def create_customer(
     country: str = "",
     category: str = "",
     customer_type: str = "b2b",
+    external_id: str = "",
 ) -> dict[str, Any]:
     cid = _uid("cust")
     ts = _now()
     ctype = "b2c" if str(customer_type).lower() == "b2c" else "b2b"
     with _lock:
         _connect().execute(
-            "INSERT INTO customers (id,name,platform,country,category,customer_type,created_at,updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (cid, name, platform, country, category, ctype, ts, ts),
+            "INSERT INTO customers (id,name,platform,country,category,customer_type,external_id,created_at,updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, name, platform, country, category, ctype, external_id, ts, ts),
         )
         _connect().commit()
     return get_customer(cid)  # type: ignore[return-value]
 
 
+def get_customer_by_handle(platform: str, external_id: str) -> dict[str, Any] | None:
+    """Look up a customer by its platform-side id — used to route inbound webhooks."""
+    if not external_id:
+        return None
+    with _lock:
+        row = _connect().execute(
+            "SELECT * FROM customers WHERE platform=? AND external_id=?",
+            (platform, external_id),
+        ).fetchone()
+    return _customer_row(row) if row else None
+
+
 def update_customer(cid: str, **fields: Any) -> None:
     if not fields:
         return
-    allowed = {"name", "platform", "country", "category", "customer_type", "stage", "win_score", "status", "next_step", "tags"}
+    allowed = {"name", "platform", "country", "category", "customer_type", "external_id", "stage", "win_score", "status", "next_step", "tags"}
     sets, vals = [], []
     for k, v in fields.items():
         if k not in allowed:

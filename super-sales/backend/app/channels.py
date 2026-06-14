@@ -77,6 +77,36 @@ class _EnvChannel:
         }
 
 
+class TelegramChannel(_EnvChannel):
+    """Telegram Bot API — free, no business account. The one platform we can
+    demo end-to-end with just a @BotFather token. ``to`` is the chat id."""
+
+    name = "telegram"
+    label = "Telegram（Bot API）"
+    risk = "official"
+    required_env = ("TELEGRAM_BOT_TOKEN",)
+
+    def send(self, to: str, messages: list[str], asset_id: str = "") -> dict[str, Any]:
+        if not self.is_configured():
+            return super().send(to, messages, asset_id)
+        import requests
+
+        base = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
+        token = os.environ["TELEGRAM_BOT_TOKEN"]
+        delivered = 0
+        for msg in messages:
+            r = requests.post(
+                f"{base}/bot{token}/sendMessage",
+                json={"chat_id": to, "text": msg},
+                timeout=15,
+            )
+            if r.ok and r.json().get("ok"):
+                delivered += 1
+            else:
+                return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
+        return {"ok": True, "channel": self.name, "delivered": delivered}
+
+
 class WhatsAppChannel(_EnvChannel):
     name = "whatsapp"
     label = "WhatsApp（Meta Cloud API）"
@@ -191,7 +221,13 @@ class WeComChannel(_EnvChannel):
 
 _REGISTRY: dict[str, Any] = {
     c.name: c
-    for c in (SandboxChannel(), WhatsAppChannel(), LineChannel(), WeComChannel())
+    for c in (
+        SandboxChannel(),
+        TelegramChannel(),
+        WhatsAppChannel(),
+        LineChannel(),
+        WeComChannel(),
+    )
 }
 
 

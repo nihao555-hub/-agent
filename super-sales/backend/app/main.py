@@ -14,12 +14,12 @@ import json
 import threading
 from collections.abc import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import background_check, channels, closer, llm, simulator, store
+from . import background_check, channels, closer, llm, simulator, store, webhooks
 from .graph import NODE_OUTPUT_FIELD, PIPELINE, build_graph
 from .retrieval import retrieval_backend
 from .state import SalesState
@@ -170,6 +170,7 @@ class CustomerCreate(BaseModel):
     country: str = ""
     category: str = ""
     customer_type: str = Field("b2b", description="b2b=顾问式；b2c=纯卖货(带货话术)")
+    external_id: str = Field("", description="平台侧 id（如 WhatsApp 号 / Telegram chat id），用于真实渠道收发")
 
 
 class InboundMessage(BaseModel):
@@ -208,6 +209,36 @@ def get_channels() -> dict[str, object]:
     return {"channels": channels.list_channels()}
 
 
+# ---------------------------------------------------------------- inbound webhooks
+# These close the loop: real customer messages come in here, get routed to the
+# durable customer, decided on, and (unless 人审 mode) auto-replied through the
+# same channel — multi-turn until a payment/contract red-line forces a handoff.
+
+
+@app.get("/api/webhooks/whatsapp")
+def whatsapp_verify(request: Request) -> PlainTextResponse:
+    """Meta WhatsApp Cloud API webhook verification handshake."""
+    q = request.query_params
+    status, body = webhooks.whatsapp_verify(
+        q.get("hub.mode", ""), q.get("hub.verify_token", ""), q.get("hub.challenge", "")
+    )
+    return PlainTextResponse(body, status_code=status)
+
+
+@app.post("/api/webhooks/whatsapp")
+async def whatsapp_inbound(request: Request) -> dict[str, object]:
+    raw = await request.body()
+    if not webhooks.whatsapp_signature_ok(raw, request.headers.get("x-hub-signature-256", "")):
+        return {"ok": False, "error": "bad signature"}
+    return webhooks.handle_whatsapp(json.loads(raw or b"{}"))
+
+
+@app.post("/api/webhooks/telegram")
+async def telegram_inbound(request: Request) -> dict[str, object]:
+    raw = await request.body()
+    return webhooks.handle_telegram(json.loads(raw or b"{}"))
+
+
 @app.get("/api/settings")
 def read_settings() -> dict[str, str]:
     return store.get_settings()
@@ -226,7 +257,7 @@ def get_customers() -> dict[str, object]:
 @app.post("/api/customers")
 def post_customer(req: CustomerCreate) -> dict[str, object]:
     return store.create_customer(
-        req.name, req.platform, req.country, req.category, req.customer_type
+        req.name, req.platform, req.country, req.category, req.customer_type, req.external_id
     )
 
 

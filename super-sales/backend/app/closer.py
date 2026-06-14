@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import humanize, llm, store
+from . import channels, humanize, llm, store
 from .retrieval import retrieve
 
 # Canonical sales pipeline — the right panel renders this as a live progress rail
@@ -312,4 +312,16 @@ def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str,
         next_step=decision.get("next_step", ""),
         status="handoff" if decision.get("handoff") else "active",
     )
+    # Deliver through the customer's real channel (sandbox = no-op, stored above).
+    # The store is always the source of truth; transport failures don't lose the
+    # message, they're just reported back to the caller.
+    customer = store.get_customer(customer_id) or {}
+    channel = channels.get_channel(customer.get("platform", "sandbox"))
+    if replies and channel.name != "sandbox":
+        result = channel.send(customer.get("external_id", ""), list(replies), asset_id)
+        for m in sent:
+            m["delivery"] = {"channel": channel.name, "ok": bool(result.get("ok"))}
+        if not result.get("ok"):
+            for m in sent:
+                m["delivery"]["error"] = result.get("error", "")
     return sent
