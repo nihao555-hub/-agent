@@ -92,6 +92,7 @@ export default function App() {
             channels={health?.channels ?? []}
             salesStages={health?.sales_stages ?? []}
             personas={health?.personas ?? []}
+            bgAvailable={health?.background_check ?? false}
           />
         )}
 

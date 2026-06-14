@@ -102,6 +102,11 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS background (
+            customer_id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,        -- JSON: public company recon + LLM brief
+            created_at REAL NOT NULL
+        );
         """
     )
     conn.commit()
@@ -343,6 +348,57 @@ def list_assets(product_id: str = "") -> list[dict[str, Any]]:
         d["shareable"] = bool(d["shareable"])
         out.append(d)
     return out
+
+
+# --------------------------------------------------------------------------- background check
+
+
+def set_background(customer_id: str, data: dict[str, Any]) -> None:
+    payload = json.dumps(data, ensure_ascii=False)
+    with _lock:
+        _connect().execute(
+            "INSERT INTO background (customer_id,data,created_at) VALUES (?,?,?)"
+            " ON CONFLICT(customer_id) DO UPDATE SET data=?, created_at=?",
+            (customer_id, payload, _now(), payload, _now()),
+        )
+        _connect().commit()
+
+
+def get_background(customer_id: str) -> dict[str, Any] | None:
+    with _lock:
+        row = _connect().execute(
+            "SELECT data FROM background WHERE customer_id=?", (customer_id,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["data"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def background_block(customer_id: str) -> str:
+    """Render the stored background check as compact prompt context."""
+    bg = get_background(customer_id)
+    if not bg:
+        return ""
+    lines = []
+    if bg.get("company"):
+        lines.append(f"公司：{bg['company']}")
+    if bg.get("domain"):
+        lines.append(f"域名：{bg['domain']}")
+    brief = bg.get("brief") or {}
+    if brief.get("industry_guess"):
+        lines.append(f"推测行业：{brief['industry_guess']}")
+    if brief.get("footprint_summary"):
+        lines.append(f"公开足迹：{brief['footprint_summary']}")
+    if brief.get("sales_angle"):
+        lines.append(f"可切入的销售角度：{brief['sales_angle']}")
+    if brief.get("talking_points"):
+        lines.append("可用话题：" + "；".join(brief["talking_points"][:4]))
+    if brief.get("caution"):
+        lines.append(f"注意：{brief['caution']}")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- settings

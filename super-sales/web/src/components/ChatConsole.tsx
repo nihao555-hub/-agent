@@ -3,11 +3,13 @@ import {
   createCustomer,
   getCustomer,
   listCustomers,
+  runBackground,
   sendInbound,
   simulateCustomer,
 } from "../api";
 import type { InboundResult } from "../api";
 import type {
+  Background,
   ChannelInfo,
   ChatMessage,
   Customer,
@@ -69,10 +71,12 @@ export default function ChatConsole({
   channels,
   salesStages,
   personas,
+  bgAvailable,
 }: {
   channels: ChannelInfo[];
   salesStages: string[];
   personas: Persona[];
+  bgAvailable: boolean;
 }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [platform, setPlatform] = useState<string>("all");
@@ -80,6 +84,8 @@ export default function ChatConsole({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [memory, setMemory] = useState<MemoryFact[]>([]);
   const [decision, setDecision] = useState<Decision | null>(null);
+  const [background, setBackground] = useState<Background | null>(null);
+  const [bgBusy, setBgBusy] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [typing, setTyping] = useState(false);
@@ -113,6 +119,18 @@ export default function ChatConsole({
     const d = await getCustomer(id);
     setMessages(d.messages);
     setMemory(d.memory);
+    setBackground(d.background ?? null);
+  }
+
+  async function handleBackground() {
+    if (!selectedId || bgBusy) return;
+    setBgBusy(true);
+    try {
+      const res = await runBackground(selectedId);
+      setBackground(res.background);
+    } finally {
+      setBgBusy(false);
+    }
   }
 
   // Reveal the AI's reply messages with human-like pacing (read delay + typing),
@@ -220,7 +238,12 @@ export default function ChatConsole({
         <section className="flex min-h-0 flex-col bg-canvas">
           {selected ? (
             <>
-              <ChatHeader customer={selected} />
+              <ChatHeader
+                customer={selected}
+                bgAvailable={bgAvailable}
+                bgBusy={bgBusy}
+                onBackground={() => void handleBackground()}
+              />
               <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
                 {messages.length === 0 && (
                   <p className="mt-10 text-center text-[13px] text-muted">
@@ -304,6 +327,7 @@ export default function ChatConsole({
             decision={decision}
             memory={memory}
             salesStages={salesStages}
+            background={background}
           />
         </aside>
       </div>
@@ -371,7 +395,17 @@ function PlatformBar({
   );
 }
 
-function ChatHeader({ customer }: { customer: Customer }) {
+function ChatHeader({
+  customer,
+  bgAvailable,
+  bgBusy,
+  onBackground,
+}: {
+  customer: Customer;
+  bgAvailable: boolean;
+  bgBusy: boolean;
+  onBackground: () => void;
+}) {
   return (
     <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
       <div className="flex items-center gap-3">
@@ -390,6 +424,14 @@ function ChatHeader({ customer }: { customer: Customer }) {
         </div>
       </div>
       <div className="flex items-center gap-4 text-right">
+        <button
+          onClick={onBackground}
+          disabled={bgBusy || !bgAvailable}
+          title={bgAvailable ? "对公开企业信息做 AI 背调（theHarvester）" : "背调引擎未安装"}
+          className="flex items-center gap-1.5 rounded-lg border border-line bg-bone px-2.5 py-1.5 text-[12px] text-ink transition hover:bg-surface disabled:opacity-40"
+        >
+          <IconShield width={13} height={13} /> {bgBusy ? "背调中…" : "AI 背调"}
+        </button>
         <div>
           <div className="text-[10.5px] uppercase tracking-[0.05em] text-muted">阶段</div>
           <div className="text-[13px] text-ink">{customer.stage}</div>
@@ -501,16 +543,70 @@ function StageRail({ stages, current }: { stages: string[]; current: string }) {
   );
 }
 
+function BackgroundCard({ bg }: { bg: Background }) {
+  const br = bg.brief ?? {};
+  const hosts = bg.footprint?.hosts ?? [];
+  return (
+    <div className="rounded-card border border-line bg-surface p-3.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.05em] text-muted">
+          <IconShield width={13} height={13} /> AI 背调 · 公开企业情报
+        </span>
+        <Badge tone={bg.engine === "theHarvester" ? "green" : "yellow"}>{bg.engine}</Badge>
+      </div>
+      <div className="space-y-1.5 text-[12px] leading-5 text-ink">
+        {(bg.company || bg.domain) && (
+          <div className="text-muted">
+            {bg.company}
+            {bg.domain && <span className="ml-1 font-mono text-[11px]">· {bg.domain}</span>}
+          </div>
+        )}
+        {br.industry_guess && (
+          <div><span className="text-muted">行业推测：</span>{br.industry_guess}</div>
+        )}
+        {br.footprint_summary && (
+          <div><span className="text-muted">公开足迹：</span>{br.footprint_summary}</div>
+        )}
+        {br.sales_angle && (
+          <div><span className="text-muted">切入角度：</span>{br.sales_angle}</div>
+        )}
+        {(br.talking_points?.length ?? 0) > 0 && (
+          <ul className="ml-3 list-disc space-y-0.5 text-muted">
+            {br.talking_points!.slice(0, 4).map((t, i) => (
+              <li key={i} className="text-ink">{t}</li>
+            ))}
+          </ul>
+        )}
+        {(br.possible_decision_makers?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {br.possible_decision_makers!.slice(0, 5).map((d, i) => (
+              <Badge key={i} tone="blue">{d}</Badge>
+            ))}
+          </div>
+        )}
+        {hosts.length > 0 && (
+          <div className="pt-0.5 text-[11px] text-muted">公开子域 {hosts.length} 个</div>
+        )}
+        {br.caution && (
+          <div className="mt-1 rounded-md bg-bone px-2 py-1 text-[11px] text-muted">注意：{br.caution}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AgentPanel({
   customer,
   decision,
   memory,
   salesStages,
+  background,
 }: {
   customer: Customer | null;
   decision: Decision | null;
   memory: MemoryFact[];
   salesStages: string[];
+  background: Background | null;
 }) {
   const currentStage = decision?.stage ?? customer?.stage ?? "";
   return (
@@ -522,6 +618,8 @@ function AgentPanel({
       {salesStages.length > 0 && customer && (
         <StageRail stages={salesStages} current={currentStage} />
       )}
+
+      {background && <BackgroundCard bg={background} />}
 
       {decision ? (
         <>

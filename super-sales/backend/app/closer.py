@@ -179,7 +179,8 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             f"国家：{customer.get('country') or '未知'} | 品类：{customer.get('category') or '未知'} | "
             f"当前阶段：{customer.get('stage')} | 当前赢率：{customer.get('win_score')}\n"
             f"【客户记忆】\n{store.memory_block(customer_id)}\n"
-            f"【商品与可用素材】\n{_assets_summary(products)}\n"
+            + (f"【AI 背调·公开企业情报】\n{_bg}\n" if (_bg := store.background_block(customer_id)) else "")
+            + f"【商品与可用素材】\n{_assets_summary(products)}\n"
             f"【最近对话】\n{store.transcript(customer_id, limit=20)}\n"
             f"【客户最新消息】{inbound}\n\n"
             f"【可引用的方法论片段】\n{_evidence_block(evidence)}"

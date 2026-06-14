@@ -22,6 +22,7 @@ export interface Health {
   live_closer?: boolean;
   sales_stages?: string[];
   personas?: Persona[];
+  background_check?: boolean;
 }
 
 export interface Persona {
@@ -170,6 +171,24 @@ export interface ChatMessage {
   translation?: string;
   lang?: string;
   created_at: number;
+}
+
+export interface BackgroundBrief {
+  industry_guess?: string;
+  footprint_summary?: string;
+  possible_decision_makers?: string[];
+  talking_points?: string[];
+  sales_angle?: string;
+  caution?: string;
+}
+
+export interface Background {
+  company: string;
+  domain: string;
+  country?: string;
+  footprint?: { hosts?: string[]; emails?: string[]; ips?: string[]; available?: boolean };
+  brief?: BackgroundBrief;
+  engine?: string;
 }
 
 export interface MemoryFact {

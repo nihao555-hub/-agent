@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import channels, closer, llm, simulator, store
+from . import background_check, channels, closer, llm, simulator, store
 from .graph import NODE_OUTPUT_FIELD, PIPELINE, build_graph
 from .retrieval import retrieval_backend
 from .state import SalesState
@@ -65,6 +65,7 @@ def health() -> dict[str, object]:
         "live_closer": True,
         "sales_stages": closer.STAGES,
         "personas": simulator.list_personas(),
+        "background_check": background_check.available(),
     }
 
 
@@ -232,6 +233,7 @@ def get_customer_detail(cid: str) -> dict[str, object]:
         "customer": customer,
         "messages": store.list_messages(cid),
         "memory": store.list_memory(cid),
+        "background": store.get_background(cid),
     }
 
 
@@ -258,6 +260,27 @@ def post_inbound(cid: str, req: InboundMessage) -> dict[str, object]:
         "messages": store.list_messages(cid),
         "memory": store.list_memory(cid),
     }
+
+
+class BackgroundRequest(BaseModel):
+    company: str = Field("", description="公司名（留空则用客户名）")
+    domain: str = Field("", description="公司主域名（可选，会明显提高质量）")
+
+
+@app.post("/api/customers/{cid}/background")
+def post_background(cid: str, req: BackgroundRequest) -> dict[str, object]:
+    """Run passive public company recon (theHarvester) + LLM brief, persist it,
+    and surface it as context for the closer. Public business info only."""
+    customer = store.get_customer(cid)
+    if customer is None:
+        return {"error": "customer not found"}
+    result = background_check.check_company(
+        req.company or customer.get("name", ""),
+        req.domain,
+        customer.get("country", ""),
+    )
+    store.set_background(cid, result)
+    return {"background": result, "available": background_check.available()}
 
 
 class SimulateRequest(BaseModel):

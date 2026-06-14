@@ -1,4 +1,5 @@
 import type {
+  Background,
   ChatMessage,
   Customer,
   Decision,
@@ -37,8 +38,21 @@ export async function createCustomer(body: {
 
 export async function getCustomer(
   id: string,
-): Promise<{ customer: Customer; messages: ChatMessage[]; memory: MemoryFact[] }> {
+): Promise<{ customer: Customer; messages: ChatMessage[]; memory: MemoryFact[]; background: Background | null }> {
   const r = await fetch(`/api/customers/${id}`);
+  return r.json();
+}
+
+export async function runBackground(
+  id: string,
+  company = "",
+  domain = "",
+): Promise<{ background: Background; available: boolean }> {
+  const r = await fetch(`/api/customers/${id}/background`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company, domain }),
+  });
   return r.json();
 }
 
