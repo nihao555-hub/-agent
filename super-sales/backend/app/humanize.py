@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import random
 import re
+import unicodedata
 
 # --- short-message reshaping ------------------------------------------------
 # Real top closers send short IM bubbles, never 200-char essays. The prompt asks
@@ -24,11 +25,22 @@ import re
 # regardless of model whims (and also covers the offline/fallback path). It only
 # fires on genuinely long messages: short replies pass through untouched, so it
 # never imposes a fixed "always N bubbles" cadence — the count tracks content.
-_MSG_CAP = int(os.getenv("HUMANIZE_MSG_CAP", "48"))      # soft per-bubble char cap
+#
+# The cap is measured in *visual width*, not raw len(): a CJK character is twice
+# as information-dense as a latin one, so a 48-char Japanese line and a 90-char
+# Portuguese line carry similar weight. Counting width keeps the guard from
+# shredding latin sentences into mid-phrase fragments while still trimming long
+# CJK walls of text.
+_MSG_CAP = int(os.getenv("HUMANIZE_MSG_CAP", "90"))      # soft per-bubble width cap (CJK≈2)
 _MAX_BUBBLES = int(os.getenv("HUMANIZE_MAX_BUBBLES", "5"))  # never explode a turn past this
 _SENT_ENDERS = "。！？；…⁇⁈⁉．!?;"  # CJK + fullwidth + ascii sentence enders
 _CLAUSE_SEPS = "、，,；;/／│|"      # secondary break points inside an over-long sentence
 _BREAKABLE = _CLAUSE_SEPS + " \t"  # plus whitespace, so long latin clauses can break on words
+
+
+def _width(text: str) -> int:
+    """Visual width: East-Asian wide/fullwidth glyphs count as 2, the rest as 1."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
 
 
 def _sentences(text: str) -> list[str]:
@@ -55,23 +67,41 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in out if s.strip()]
 
 
+_KEEP_WHOLE = 1.25  # a single sentence up to this × cap stays whole; longer → balanced-split
+
+
+def _split_long(s: str, cap: int) -> list[str]:
+    """Split one *single* sentence only when it is meaningfully wider than ``cap``
+    (> ``_KEEP_WHOLE``×), and then at the clause/word break nearest its visual
+    midpoint — recursively, so we get the fewest, most balanced pieces instead of
+    greedy mid-phrase shrapnel. A sentence with no break points is left whole
+    (never cut mid-word)."""
+    if _width(s) <= int(cap * _KEEP_WHOLE):
+        return [s]
+    target = _width(s) / 2
+    best_i, best_d = -1, None
+    run = 0
+    for i, ch in enumerate(s):
+        run += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if ch in _BREAKABLE and 0 < i < len(s) - 1:
+            d = abs(run - target)
+            if best_d is None or d < best_d:
+                best_d, best_i = d, i
+    if best_i < 0:
+        return [s]
+    left, right = s[: best_i + 1].strip(), s[best_i + 1:].strip()
+    if not left or not right:
+        return [s]
+    return _split_long(left, cap) + _split_long(right, cap)
+
+
 def _atoms(text: str, cap: int) -> list[str]:
-    """Sentence chunks, but any sentence still longer than ``cap`` is further
-    broken at clause separators (、，；/ …) so no single atom is a wall of text.
-    A clause with no separators at all is left intact (we never cut mid-word)."""
+    """Sentence chunks; a single over-long sentence is balanced-split (see
+    ``_split_long``). Normal-length sentences are kept whole, so a multi-sentence
+    essay becomes one short bubble per sentence rather than a torrent of clauses."""
     out: list[str] = []
     for s in _sentences(text):
-        if len(s) <= cap:
-            out.append(s)
-            continue
-        buf = ""
-        for ch in s:
-            buf += ch
-            if ch in _BREAKABLE and len(buf) >= cap * 0.6:
-                out.append(buf.strip())
-                buf = ""
-        if buf.strip():
-            out.append(buf.strip())
+        out.extend(_split_long(s, cap))
     return [a for a in out if a]
 
 
@@ -84,12 +114,12 @@ def _join(a: str, b: str) -> str:
 
 
 def _pack(atoms: list[str], cap: int) -> list[str]:
-    """Greedily pack atoms into bubbles, each kept under ``cap`` (a single atom
-    bigger than cap becomes its own bubble — we never cut mid-clause)."""
+    """Greedily pack atoms into bubbles, each kept under ``cap`` *visual width* (a
+    single atom wider than cap becomes its own bubble — we never cut mid-clause)."""
     bubbles: list[str] = []
     cur = ""
     for s in atoms:
-        if cur and len(cur) + len(s) > cap:
+        if cur and _width(_join(cur, s)) > cap:
             bubbles.append(cur)
             cur = s
         else:
@@ -119,7 +149,7 @@ def reshape(replies: list[str], translations: list[str] | None = None,
         if not msg:
             continue
         tr = translations[idx] if idx < len(translations) else ""
-        if len(msg) <= cap:
+        if _width(msg) <= cap:
             out_r.append(msg)
             out_t.append(tr)
             continue
@@ -128,8 +158,8 @@ def reshape(replies: list[str], translations: list[str] | None = None,
         if len(bubbles) > max_bubbles:
             # Too many bubbles → widen the cap until they pack into ~max_bubbles
             # roughly-equal short bubbles (never one fat tail). Guaranteed to
-            # terminate: at cap == total it collapses to a single bubble.
-            total = sum(len(a) for a in atoms)
+            # terminate: at cap == total width it collapses to a single bubble.
+            total = sum(_width(a) for a in atoms)
             even_cap = max(cap, -(-total // max_bubbles))  # ceil(total / max_bubbles)
             while len(_pack(atoms, even_cap)) > max_bubbles and even_cap < total:
                 even_cap += max(4, cap // 4)
