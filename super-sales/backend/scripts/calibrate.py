@@ -284,7 +284,7 @@ def _seed_demo_assets(product_id: str, name: str) -> None:
     store.add_asset(product_id, "image", f"{name}_产品图.jpg",
                     caption=f"{name} 实拍/界面图", shareable=True, url=f"{base}/product.jpg")
     store.add_asset(product_id, "document", f"{name}_规格报价单.pdf",
-                    caption="规格参数 + 报价单（对外版）", shareable=True, url=f"{base}/spec.pdf")
+                    caption="规格参数 + 报价单", shareable=True, url=f"{base}/spec.pdf")
     store.add_asset(product_id, "video", f"{name}_3分钟演示.mp4",
                     caption="核心功能 3 分钟演示", shareable=True, url=f"{base}/demo.mp4")
     store.add_asset(product_id, "document", f"{name}_客户案例.pdf",
