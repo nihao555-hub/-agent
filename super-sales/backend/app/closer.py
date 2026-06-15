@@ -89,6 +89,7 @@ def _fallback_decision(customer: dict[str, Any], inbound: str) -> dict[str, Any]
             {"method": "稳态兜底", "move": "短确认并承诺马上跟进，保持同语言"},
         ],
         "send_asset": "",
+        "send_assets": [],
         "stage": customer.get("stage", "认知"),
         "win_score": customer.get("win_score", 40),
         "next_step": "约一次 15 分钟场景测算/演示",
@@ -213,7 +214,10 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "尤其别连着两轮都用问句收尾，也别每轮都用附和词起头。提不提问、共不共情，都看情境，不是必做动作。\n"
             "  • **结构化交付物别在聊天框里逐条敲**：客户要的是『书面方案/报价单/规格清单/试点计划/测试报告』这类"
             "并列多项的东西时，真人不会把『工期/人力/风险/成功标准』一条条敲进聊天——那种执行令式的工整列表一眼是 AI。"
-            "正确做法：聊天里只用一两句短消息说『我整理成一页发你』并用 send_asset 发素材/文档，把清单留到文档里。\n"
+            "正确做法：聊天里只用一两句短消息说『我整理成一页发你』并把素材/文档ID放进 send_assets 真的发出去，把清单留到文档里。\n"
+            "  • **你现在真的能发素材了**：send_assets 里的图片/视频/文档/语音会被当作真实文件发到客户对话框（不是嘴上说说）。"
+            "真人销冠该甩产品图就甩图、该发报价单/规格书/案例PDF就发文件、该发演示视频就发视频——客户要『看看实物/案例/参数表』时，"
+            "别再干用文字描述，直接从【可用素材】里挑对的素材发出去；一次最多发约 2-3 个、别一股脑全推。只发标记“可对外”的，禁止外发的绝不发。\n"
             "  • 允许真人的不完美：偶尔口语碎句、语气词（嗯/哦/说实话/老实讲/let me be honest/hmm）、轻微停顿、"
             "把话分两条发；面对压价/刁难时可以流露一点为难、无奈或小情绪（但不破红线）。\n"
             "  • 别堆术语：少用“scope/Enterprise band/for budgeting/headroom/sweet spot”这类一连串销售黑话；"
@@ -235,7 +239,7 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "中间件即可完成数据互通；实施周期通常 4-8 周，具体取决于贵司仓库数量、数据规范度与定制需求，我们会先做一次需求调研……』\n"
             "  √ 正范（真人·短·一步步、自然分成几条短消息）：『能接的，SAP、用友都对接过』/『多久得看你们几个仓、数据规不规整』/"
             "『我回头让实施给你个准的——你们现在几个仓在跑？』\n"
-            "照正范来：每条都短、口语、只推进一步；该发素材就把素材ID放进 send_asset，而不是干说。\n"
+            "照正范来：每条都短、口语、只推进一步；该发素材就把素材ID放进 send_assets，而不是干说。\n"
             "【报价·动态且守住区间】若商品给了报价区间：默认从中位偏上开口，不要一上来就报底价；客户砍价"
             "时要演足为难感（如“这个价我真做不了主，得帮你向上申请”“这已经是给你的最低了”），用赠品/"
             "加量/账期等非降价方式先顶，逼不得已才小步让；**任何情况下都不得报出低于下限或高于上限的价**，"
@@ -248,6 +252,18 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "量化 → 给针对性方案与差异化价值 → 用具体价值或案例锚定(而非只甩价格) → 逐条化解异议 → "
             "信号成熟时温和促成下一步(而非逼单) → 收款/合同等交回客户并转人工。每条消息都要让对话"
             "往前走一步。\n"
+            "【成交推进·提高成单率（重点）】别只做答疑机器人——答完要顺势把商机往前推一格：\n"
+            "  • **微承诺阶梯**：每次只要一个具体、低门槛、好答应的下一步（发份资料看看 / 拉个 15 分钟演示 / "
+            "给你按你们规模算一版报价 / 开个试点），客户答应一个小的，就更容易答应下一个；别一上来就逼大决定。\n"
+            "  • **下一步给选择题、别开放式**：用『周三上午还是周四下午方便？』『要我先发案例还是先发报价？』这种二选一，"
+            "比『有需要随时找我』成单率高得多——next_step 字段要写成这种明确、带时间点、可立即答应的动作。\n"
+            "  • **试探性成交（trial close）**：在还没正式逼单时，时不时探一下温度——『这样的话基本能解决你说的对账问题吧？』"
+            "『如果这块能搞定，你们大概什么时候想上？』——据反馈调整，而不是闷头讲完才发现没戏。\n"
+            "  • **异议=买信号，要顺势推进而非仅化解**：化解完一个异议（价格/对接/周期/决策），紧接着锚定价值再递一个具体下一步，"
+            "把『解决疑虑』变成『往前走一步』；价格异议先用价值/ROI/案例顶，再谈钱。\n"
+            "  • **善用素材推进**：客户犹豫『再看看 / 我考虑下』时，发一份对的案例/演示/报价（send_assets）往往比再讲一段更能推进。\n"
+            "  • **注意**：『推进』指整段对话稳步向成交走、信号到了就温和促成，**不是每条都加一句催单或每轮都抛问题**——"
+            "那会重新落回上面说的『头号AI破绽』。该直接给价值就给、火候不到别硬逼，节奏自然。\n"
             "【对手识别】若对方明显是同行刺探(套价格/套话术/套供应链)或恶意刁难/钓鱼：不泄露任何敏感"
             "信息、不被激怒，礼貌而克制，必要时收住话题或转人工。绝不为了“成交”而踩红线或做出让用户"
             "受损的承诺——红线永远高于成单。\n"
@@ -264,7 +280,8 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
             "customer_lang(客户语言名称，如 English/日本語/Espa\u00f1ol/中文)、"
             "inbound_translation(客户最新消息的中文译文；若本是中文则原文返回)、"
             "moves(数组，每项含 method[方法论名，如SPIN/Challenger/MEDDIC/Cialdini…] 和 move[本轮具体用了哪一招]，说明方法论用在了哪里)、"
-            "send_asset(要附带发送的素材ID，没有则空字符串；只能选标记“可对外”的素材)、"
+            "send_assets(要发给客户的素材ID数组，没有就空数组[]；只能选标记“可对外”的素材，一次最多约 2-3 个；"
+            "这些素材会被真的当作图片/视频/文档/语音文件发到客户对话框，不是只在文字里提一句)、"
             f"stage(更新后的阶段，只能从这些中选：{'/'.join(STAGES)})、win_score(0-100整数赢率)、"
             "next_step(明确、低门槛、有时间点的下一步)、"
             "new_memory(数组，每项含 kind[pain|preference|commitment|objection|taboo|fact] 和 text，本轮新获取需长期记住的信息，用中文记录)、"
@@ -316,7 +333,13 @@ def decide(customer_id: str, inbound: str) -> dict[str, Any]:
     result.setdefault("customer_lang", "")
     result.setdefault("inbound_translation", inbound)
     result.setdefault("moves", [])
-    result["send_asset"] = _validate_asset(result.get("send_asset", ""), products)
+    # The model may name one asset (send_asset) or several (send_assets). Merge,
+    # then keep only shareable ones (privacy red-line) — see _validate_assets.
+    _raw_assets = list(result.get("send_assets") or [])
+    if result.get("send_asset"):
+        _raw_assets.insert(0, result["send_asset"])
+    result["send_assets"] = _validate_assets(_raw_assets, products)
+    result["send_asset"] = result["send_assets"][0] if result["send_assets"] else ""
     result["stage"] = _norm_stage(result.get("stage") or customer.get("stage", "认知"))
     result.setdefault("win_score", customer.get("win_score", 40))
     result.setdefault("next_step", "")
@@ -347,19 +370,58 @@ def _validate_asset(asset_id: str, products: list[dict[str, Any]]) -> str:
     return ""
 
 
+# Most a single turn should ever attach — a real rep drops one or two things, not
+# a dump. Guards against the model flooding the chat with every asset it sees.
+_MAX_ASSETS_PER_TURN = 4
+
+
+def _validate_assets(asset_ids: list[Any], products: list[dict[str, Any]]) -> list[str]:
+    """Privacy red-line for the multi-asset path: dedupe, keep only shareable
+    ids, and cap how many can ride along on one turn."""
+    out: list[str] = []
+    for raw in asset_ids:
+        aid = _validate_asset(str(raw or ""), products)
+        if aid and aid not in out:
+            out.append(aid)
+        if len(out) >= _MAX_ASSETS_PER_TURN:
+            break
+    return out
+
+
+def _resolve_assets(asset_ids: list[str]) -> list[dict[str, Any]]:
+    """Turn validated asset ids into the dicts channels need to actually send
+    (kind / caption / filename / url / local_path). Skips ids that vanished."""
+    resolved: list[dict[str, Any]] = []
+    for aid in asset_ids:
+        a = store.get_asset(aid)
+        if a and a.get("shareable"):
+            resolved.append(a)
+    return resolved
+
+
 def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str, Any]]:
     """Persist a decision: send agent messages, update state, store new memory."""
     sent: list[dict[str, Any]] = []
-    # Re-validate the asset here too — an approved/edited decision must still
-    # obey the privacy red-line (only explicitly shareable assets go out).
-    asset_id = _validate_asset(decision.get("send_asset", ""), store.list_products())
+    # Re-validate assets here too — an approved/edited decision must still obey
+    # the privacy red-line (only explicitly shareable assets go out).
+    products = store.list_products()
+    raw_ids = list(decision.get("send_assets") or [])
+    if decision.get("send_asset"):
+        raw_ids.insert(0, decision["send_asset"])
+    asset_ids = _validate_assets(raw_ids, products)
+    resolved = _resolve_assets(asset_ids)
     replies = decision.get("reply", [])
     trans = decision.get("reply_translation", [])
     lang = decision.get("customer_lang", "")
+    # The first asset rides on the last text bubble (back-compat: one asset_id per
+    # message); any extras are persisted as their own attachment-only messages.
+    first_id = asset_ids[0] if asset_ids else ""
     for i, text in enumerate(replies):
-        aid = asset_id if i == len(replies) - 1 else ""
+        aid = first_id if i == len(replies) - 1 else ""
         tr = trans[i] if i < len(trans) else ""
         sent.append(store.add_message(customer_id, "agent", text, asset_id=aid, translation=tr, lang=lang))
+    for aid in (asset_ids[1:] if replies else asset_ids):
+        sent.append(store.add_message(customer_id, "agent", "", asset_id=aid, lang=lang))
     for fact in decision.get("new_memory", []):
         if isinstance(fact, dict) and fact.get("text"):
             store.add_memory(customer_id, fact.get("kind", "fact"), str(fact["text"]))
@@ -375,11 +437,12 @@ def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str,
     # message, they're just reported back to the caller.
     customer = store.get_customer(customer_id) or {}
     channel = channels.get_channel(customer.get("platform", "sandbox"))
-    if replies and channel.name != "sandbox":
+    if (replies or resolved) and channel.name != "sandbox":
         # Human cadence: type for a beat (with a "typing…" indicator) before each
         # message lands, instead of firing them off instantly. We deliver in a
         # background thread so the inbound webhook still returns immediately and
-        # doesn't time out while the closer "types".
+        # doesn't time out while the closer "types". Media rides along after the
+        # text, sent as real photos/videos/documents by the channel adapter.
         delays = humanize.send_delays({
             "read_ms": decision.get("read_ms", 0),
             "think_ms": decision.get("think_ms", 0),
@@ -388,7 +451,7 @@ def apply_decision(customer_id: str, decision: dict[str, Any]) -> list[dict[str,
         to = customer.get("external_id", "")
         msgs = list(replies)
         threading.Thread(
-            target=channel.send, args=(to, msgs, asset_id, delays), daemon=True,
+            target=channel.send, args=(to, msgs, resolved, delays), daemon=True,
         ).start()
         for m in sent:
             m["delivery"] = {"channel": channel.name, "queued": True}

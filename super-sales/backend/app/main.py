@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
+import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import background_check, channels, closer, llm, reflect, simulator, store, webhooks
@@ -198,6 +200,7 @@ class AssetCreate(BaseModel):
     filename: str
     caption: str = ""
     shareable: bool = True
+    url: str = ""  # public URL (CDN/website) when the media isn't uploaded as bytes
 
 
 class SettingsUpdate(BaseModel):
@@ -397,9 +400,60 @@ def post_product(req: ProductCreate) -> dict[str, object]:
     )
 
 
+_KIND_BY_EXT = {
+    ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image", ".webp": "image",
+    ".mp4": "video", ".mov": "video", ".webm": "video", ".mkv": "video",
+    ".mp3": "audio", ".ogg": "audio", ".wav": "audio", ".m4a": "audio",
+}
+
+
+def _kind_from_name(name: str) -> str:
+    return _KIND_BY_EXT.get(os.path.splitext(name)[1].lower(), "document")
+
+
+@app.get("/api/assets")
+def get_assets(product_id: str = "") -> dict[str, object]:
+    return {"assets": store.list_assets(product_id)}
+
+
 @app.post("/api/assets")
 def post_asset(req: AssetCreate) -> dict[str, object]:
-    return store.add_asset(req.product_id, req.kind, req.filename, req.caption, req.shareable)
+    return store.add_asset(
+        req.product_id, req.kind, req.filename, req.caption, req.shareable, url=req.url
+    )
+
+
+@app.post("/api/assets/upload")
+async def upload_asset(
+    product_id: str = Form(...),
+    file: UploadFile = File(...),
+    kind: str = Form(""),
+    caption: str = Form(""),
+    shareable: bool = Form(True),
+) -> dict[str, object]:
+    """Upload the real bytes behind an asset so the closer can actually send it.
+
+    The file is saved under the (gitignored) asset dir with a collision-proof name;
+    the stored asset records that filename, which channels resolve to a local path
+    and transmit as a real photo/video/document/audio."""
+    orig = os.path.basename(file.filename or "asset")
+    stored_name = f"{uuid.uuid4().hex}_{orig}"
+    dest = os.path.join(store.asset_dir(), stored_name)
+    with open(dest, "wb") as fh:
+        while chunk := await file.read(1 << 20):
+            fh.write(chunk)
+    resolved_kind = kind.strip() or _kind_from_name(orig)
+    return store.add_asset(
+        product_id, resolved_kind, stored_name, caption=caption, shareable=shareable
+    )
+
+
+@app.get("/api/assets/{asset_id}/file", response_model=None)
+def get_asset_file(asset_id: str) -> FileResponse | PlainTextResponse:
+    a = store.get_asset(asset_id)
+    if a is None or not a.get("local_path"):
+        return PlainTextResponse("asset file not found", status_code=404)
+    return FileResponse(a["local_path"], filename=os.path.basename(a.get("filename", "asset")))
 
 
 @app.get("/api/lessons")

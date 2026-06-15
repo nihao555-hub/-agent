@@ -23,6 +23,12 @@ import uuid
 from typing import Any
 
 _DB_PATH = os.getenv("SUPER_SALES_DB", os.path.join(os.path.dirname(__file__), "..", "data", "super_sales.db"))
+# Where uploaded media (the files behind shareable assets) live. Kept next to the
+# DB so it follows the same persisted volume, and gitignored (data/ is ignored).
+_ASSET_DIR = os.getenv(
+    "SUPER_SALES_ASSET_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(_DB_PATH)), "assets"),
+)
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
@@ -96,8 +102,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS assets (
             id TEXT PRIMARY KEY,
             product_id TEXT DEFAULT '',
-            kind TEXT NOT NULL,           -- image | video | doc | table | text
-            filename TEXT NOT NULL,
+            kind TEXT NOT NULL,           -- image | video | document | audio | table | text
+            filename TEXT NOT NULL,       -- stored file name under the asset dir (the actual bytes)
+            url TEXT DEFAULT '',          -- OR a public URL to the media (CDN/website), sent as-is
             caption TEXT DEFAULT '',
             shareable INTEGER DEFAULT 1,
             created_at REAL NOT NULL
@@ -145,6 +152,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE products ADD COLUMN price_max REAL")
     if "currency" not in pcols:
         conn.execute("ALTER TABLE products ADD COLUMN currency TEXT DEFAULT ''")
+    acols = {r["name"] for r in conn.execute("PRAGMA table_info(assets)").fetchall()}
+    if "url" not in acols:
+        conn.execute("ALTER TABLE assets ADD COLUMN url TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -365,24 +375,53 @@ def create_product(
     return d
 
 
+def asset_dir() -> str:
+    """Absolute directory where uploaded media bytes live (created on demand)."""
+    os.makedirs(_ASSET_DIR, exist_ok=True)
+    return _ASSET_DIR
+
+
+def asset_local_path(filename: str) -> str:
+    """Resolve a stored filename to an on-disk path, or '' if the bytes are absent
+    (e.g. the asset is URL-only, or the file was never uploaded)."""
+    if not filename:
+        return ""
+    path = os.path.join(_ASSET_DIR, os.path.basename(filename))
+    return path if os.path.isfile(path) else ""
+
+
 def add_asset(
-    product_id: str, kind: str, filename: str, caption: str = "", shareable: bool = True
+    product_id: str,
+    kind: str,
+    filename: str,
+    caption: str = "",
+    shareable: bool = True,
+    url: str = "",
 ) -> dict[str, Any]:
     aid = _uid("asset")
     with _lock:
         _connect().execute(
-            "INSERT INTO assets (id,product_id,kind,filename,caption,shareable,created_at) VALUES (?,?,?,?,?,?,?)",
-            (aid, product_id, kind, filename, caption, 1 if shareable else 0, _now()),
+            "INSERT INTO assets (id,product_id,kind,filename,url,caption,shareable,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (aid, product_id, kind, filename, url, caption, 1 if shareable else 0, _now()),
         )
         _connect().commit()
-    return {
-        "id": aid,
-        "product_id": product_id,
-        "kind": kind,
-        "filename": filename,
-        "caption": caption,
-        "shareable": shareable,
-    }
+    return get_asset(aid)  # type: ignore[return-value]
+
+
+def get_asset(asset_id: str) -> dict[str, Any] | None:
+    """Fetch one asset with its `shareable` flag coerced and its on-disk path
+    resolved (``local_path`` is '' when only a URL is available)."""
+    if not asset_id:
+        return None
+    with _lock:
+        row = _connect().execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["shareable"] = bool(d["shareable"])
+    d["local_path"] = asset_local_path(d.get("filename", ""))
+    return d
 
 
 def list_assets(product_id: str = "") -> list[dict[str, Any]]:
@@ -397,6 +436,7 @@ def list_assets(product_id: str = "") -> list[dict[str, Any]]:
     for r in rows:
         d = dict(r)
         d["shareable"] = bool(d["shareable"])
+        d["local_path"] = asset_local_path(d.get("filename", ""))
         out.append(d)
     return out
 

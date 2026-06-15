@@ -6,3 +6,4 @@ langgraph>=0.2.0
 fastembed>=0.3.0
 requests>=2.31          # RAGFlow retrieval backend + provisioning script
 pycryptodome>=3.20      # RSA login for scripts/ragflow_ingest.py
+python-multipart>=0.0.9  # multipart form parsing for /api/assets/upload
