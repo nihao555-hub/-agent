@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import os
 import time
+from collections.abc import Callable
 from typing import Any, Protocol
 
 # Human-like send pacing: how long to "type" before each message lands. A real
@@ -41,6 +42,22 @@ _TYPING_CAP_MS = 12000
 
 def _sleep_ms(ms: int) -> None:
     time.sleep(max(0, min(int(ms), _TYPING_CAP_MS)) / 1000.0)
+
+
+def _asset_wait(wait_ms: int, action: Callable[[], None] | None = None) -> None:
+    """Pause *before* an asset is sent — a real rep goes and finds the file
+    rather than pasting it instantly. While we wait we keep refreshing an
+    optional presence/"uploading…" indicator so the customer sees activity."""
+    remaining = min(int(wait_ms or 0), _TYPING_CAP_MS)
+    while remaining > 0:
+        if action is not None:
+            try:
+                action()
+            except Exception:  # noqa: BLE001
+                pass
+        step = min(remaining, 4500)
+        _sleep_ms(step)
+        remaining -= step
 
 
 # How each asset kind maps onto Telegram's send methods (method, json/form field,
@@ -166,8 +183,15 @@ class TelegramChannel(_EnvChannel):
                 delivered += 1
             else:
                 return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
-        # then the media — what makes this more than a text bot.
-        for a in assets or []:
+        # then the media — what makes this more than a text bot. Pause to "find"
+        # each file first (showing the matching upload action) so it never lands
+        # the same instant as the text.
+        nmsg = len(messages)
+        for j, a in enumerate(assets or []):
+            _, _, action = _TG_MEDIA.get(a.get("kind", ""), ("sendDocument", "document", "upload_document"))
+            wait_ms = pacing[nmsg + j] if pacing and nmsg + j < len(pacing) else 0
+            _asset_wait(wait_ms, lambda act=action: requests.post(
+                f"{api}/sendChatAction", json={"chat_id": to, "action": act}, timeout=10))
             ok, err = self._send_media(requests, api, to, a)
             if ok:
                 delivered += 1
@@ -242,7 +266,14 @@ class WhatsAppChannel(_EnvChannel):
             else:
                 return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
         media_url = f"{base}/message/sendMedia/{instance}"
-        for a in assets or []:
+        presence_url = f"{base}/chat/sendPresence/{instance}"
+        nmsg = len(messages)
+        for j, a in enumerate(assets or []):
+            # "find the file" pause, showing a composing presence while we wait.
+            wait_ms = pacing[nmsg + j] if pacing and nmsg + j < len(pacing) else 0
+            _asset_wait(wait_ms, lambda: requests.post(
+                presence_url, headers=headers,
+                json={"number": to, "presence": "composing"}, timeout=10))
             ok, err = self._send_media(requests, media_url, headers, to, a)
             if ok:
                 delivered += 1
@@ -292,34 +323,49 @@ class LineChannel(_EnvChannel):
 
         base = os.getenv("LINE_API_BASE", "https://api.line.me").rstrip("/")
         headers = {"Authorization": f"Bearer {os.environ['LINE_CHANNEL_TOKEN']}"}
-        objs: list[dict[str, Any]] = [{"type": "text", "text": m} for m in messages]
+        text_objs: list[dict[str, Any]] = [{"type": "text", "text": m} for m in messages]
         # LINE media must be served from a public https URL (it has no upload-and-send
         # in one call). With a URL we send a real image/video bubble; otherwise we
         # fall back to a text line carrying the caption so nothing is silently dropped.
+        media_objs: list[dict[str, Any]] = []
         for a in assets or []:
             link, kind, cap = a.get("url", ""), a.get("kind", ""), _asset_caption(a)
             if link.startswith("https://") and kind in ("image", "photo"):
-                objs.append({"type": "image", "originalContentUrl": link, "previewImageUrl": link})
+                media_objs.append({"type": "image", "originalContentUrl": link, "previewImageUrl": link})
             elif link.startswith("https://") and kind == "video":
-                objs.append({"type": "video", "originalContentUrl": link, "previewImageUrl": link})
+                media_objs.append({"type": "video", "originalContentUrl": link, "previewImageUrl": link})
             else:
                 note = f"【资料】{cap}" + (f"\n{link}" if link else "")
-                objs.append({"type": "text", "text": note})
+                media_objs.append({"type": "text", "text": note})
+
+        def _push(objs: list[dict[str, Any]], delivered: int) -> tuple[int, dict[str, Any] | None]:
+            for i in range(0, len(objs), 5):  # LINE push accepts up to 5 objects per call.
+                chunk = objs[i : i + 5]
+                r = requests.post(
+                    f"{base}/v2/bot/message/push",
+                    headers=headers, json={"to": to, "messages": chunk}, timeout=15,
+                )
+                if r.ok:
+                    delivered += len(chunk)
+                else:
+                    return delivered, {"ok": False, "channel": self.name,
+                                       "delivered": delivered, "error": r.text[:200]}
+            return delivered, None
+
         delivered = 0
-        for i in range(0, len(objs), 5):  # LINE push accepts up to 5 message objects per call.
+        for i in range(0, len(text_objs), 5):
             if pacing and i < len(pacing):
                 _sleep_ms(pacing[i])  # pace bursts; LINE has no public typing API
-            chunk = objs[i : i + 5]
-            r = requests.post(
-                f"{base}/v2/bot/message/push",
-                headers=headers,
-                json={"to": to, "messages": chunk},
-                timeout=15,
-            )
-            if r.ok:
-                delivered += len(chunk)
-            else:
-                return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
+            delivered, err = _push(text_objs[i : i + 5], delivered)
+            if err:
+                return err
+        # media: pause to "find" the file (LINE has no typing API, so just wait)
+        # before the image/video/note bubbles land.
+        if media_objs:
+            _asset_wait(pacing[len(text_objs)] if pacing and len(text_objs) < len(pacing) else 0)
+            delivered, err = _push(media_objs, delivered)
+            if err:
+                return err
         return {"ok": True, "channel": self.name, "delivered": delivered, "assets": len(assets or [])}
 
 
@@ -375,8 +421,12 @@ class WeComChannel(_EnvChannel):
                 return {"ok": False, "channel": self.name, "delivered": delivered, "error": r.text[:200]}
         # WeCom media requires a prior upload→media_id step; we send the asset by
         # uploading the local file (or a downloaded URL) to the temp-media API, then
-        # dispatching the matching image/video/file message.
-        for a in assets or []:
+        # dispatching the matching image/video/file message. Pause to "find" each
+        # file first (WeCom has no typing API, so just wait) before it lands.
+        nmsg = len(messages)
+        for j, a in enumerate(assets or []):
+            wait_ms = pacing[nmsg + j] if pacing and nmsg + j < len(pacing) else 0
+            _asset_wait(wait_ms)
             ok, err = self._send_media(requests, base, token, agent, to, a)
             if ok:
                 delivered += 1

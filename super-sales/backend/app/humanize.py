@@ -220,6 +220,28 @@ def send_delays(plan: dict[str, object]) -> list[int]:
     return out
 
 
+# a real person doesn't paste a file instantly — they go *find* it first
+# (scroll the gallery, dig up the PDF, locate the demo clip). The first asset
+# takes the longest (the "hunt"); later ones in the same turn are quicker since
+# they're already in the same folder/chat.
+_ASSET_FIND_MIN, _ASSET_FIND_MAX = 3000, 7000   # first asset: rummaging for it
+_ASSET_NEXT_MIN, _ASSET_NEXT_MAX = 1500, 4000   # subsequent assets: already there
+
+
+def asset_delays(n_assets: int, seed: int | None = None) -> list[int]:
+    """Delay (ms) to wait *before* sending each asset, with an "uploading/sending
+    file…" indicator shown during the wait — so media never lands instantly but
+    looks like the rep is hunting it down and attaching it. Returns one delay per
+    asset; first is longest (the search), the rest are shorter follow-ups."""
+    if n_assets <= 0:
+        return []
+    rng = random.Random(seed if seed is not None else 0x5A)
+    out = [rng.randint(_ASSET_FIND_MIN, _ASSET_FIND_MAX)]
+    for _ in range(1, n_assets):
+        out.append(rng.randint(_ASSET_NEXT_MIN, _ASSET_NEXT_MAX))
+    return out
+
+
 def pacing(inbound: str, replies: list[str], seed: int | None = None) -> list[int]:
     """Back-compat: a single delay (ms) before each message (read+think folded into [0])."""
     p = plan(inbound, replies, seed)

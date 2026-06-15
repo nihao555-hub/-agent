@@ -313,9 +313,13 @@ def _print_turn(n: int, buyer: str, inbound: str, decision: dict[str, Any]) -> N
         timing = f"你回复后 {secs}s" if i == 0 else f"间隔 {secs}s"
         print(f"  ⏱ {timing} · 正在输入…", flush=True)
         print(f"  AI 销冠 ▸ {r}{zh}  [{len(r)}字]", flush=True)
-    for aid in decision.get("send_assets") or []:
+    asset_ids = decision.get("send_assets") or []
+    adelays = humanize.asset_delays(len(asset_ids))
+    for j, aid in enumerate(asset_ids):
         a = store.get_asset(aid) or {}
         where = "本地文件" if a.get("local_path") else ("URL" if a.get("url") else "缺文件")
+        asecs = round((adelays[j] if j < len(adelays) else 3000) / 1000.0, 1)
+        print(f"  ⏳ 翻找素材 {asecs}s · 正在发送…", flush=True)
         print(f"  📎 发送素材 ▸ {a.get('kind', '?')}·{a.get('filename', aid)} "
               f"「{a.get('caption', '')}」({where})", flush=True)
     moves = decision.get("moves") or []
