@@ -12,6 +12,7 @@ offline (no key, no network) — same "兜底" philosophy as the rest of the rep
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
@@ -19,6 +20,8 @@ import time
 from typing import Any
 
 from openai import OpenAI
+
+logger = logging.getLogger("super_sales.llm")
 
 _API_KEY = os.getenv("LLM_API_KEY", "").strip()
 _BASE_URL = os.getenv("LLM_BASE_URL", "https://api.grsai.com/v1").strip()
@@ -93,11 +96,16 @@ def chat_json(system: str, user: str, *, temperature: float = 0.4, model: str | 
 
 
 def _create_with_retry(client: OpenAI, model: str, messages: list[dict[str, str]],
-                       temperature: float, *, tries: int = 4) -> Any:
+                       temperature: float, *, tries: int = 6) -> Any:
     """Call the chat endpoint, retrying transient failures (timeouts / 429 / 5xx)
     with exponential backoff + jitter. Without this, a momentary API hiccup makes
     the closer drop to its canned fallback reply — which speaks the wrong language
-    and reads as an obvious bot. Retrying keeps the real, localized answer."""
+    and reads as an obvious bot. Retrying keeps the real, localized answer.
+
+    The grsai/gpt-5.5 endpoint shows wide per-call latency (observed 3–22s) and
+    occasional overload windows; 6 tries with backoff (~0.8→25s, total ~50s) ride
+    out a far longer hiccup than the old 4-try/~5.6s budget, which is what let a
+    transient blip cascade into a whole conversation of canned replies."""
     delay = 0.8
     last_err: Exception | None = None
     for attempt in range(tries):
@@ -110,7 +118,9 @@ def _create_with_retry(client: OpenAI, model: str, messages: list[dict[str, str]
         except Exception as err:  # noqa: BLE001 - transport/rate-limit/5xx are transient
             last_err = err
             if attempt == tries - 1:
+                logger.warning("LLM call failed after %d tries: %s", tries, err)
                 raise
+            logger.info("LLM transient error (try %d/%d), backing off: %s", attempt + 1, tries, err)
             time.sleep(delay + random.uniform(0, 0.4))
-            delay *= 2
+            delay = min(delay * 2, 16.0)
     raise RuntimeError(f"LLM 调用失败: {last_err}")  # pragma: no cover

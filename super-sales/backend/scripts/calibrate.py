@@ -231,20 +231,31 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
     cid = cust["id"]
     _seed_lead_packet(cid, scenario, identity)
     persona_disp = (persona_override or {}).get("label") or persona_key
+    if persona_override and persona_override.get("seed"):
+        persona_seed = persona_override["seed"]
+    else:
+        persona_seed = simulator.PERSONAS.get(persona_key, simulator.PERSONAS["skeptic"])["seed"]
     if live:
         org = identity.get("org") or identity["role"]
         print(f"\n{'═'*72}\n▶ {scenario['product']['name']} | 买家 {identity['name']}（{org}，{identity['country']}）"
               f" | 隐藏人设={persona_disp}\n{'═'*72}", flush=True)
     handoff = False
     final_stage = ""
+    degraded_turns = 0  # turns where the closer fell back (LLM blip) instead of really replying
+    turns_done = 0
     for t in range(turns):
         sim = simulator.next_message(cid, persona_key, persona_override=persona_override)
         store.add_message(cid, "customer", sim["text"])
         decision = closer.decide(cid, sim["text"])
         closer.apply_decision(cid, decision)
         final_stage = decision.get("stage", final_stage)
+        turns_done += 1
+        if decision.get("degraded"):
+            degraded_turns += 1
         if live:
             _print_turn(t + 1, identity["name"], sim["text"], decision)
+            if decision.get("degraded"):
+                print("    ⚠ 本轮 LLM 兜底（接口抖动），非真实成交回合", flush=True)
         if decision.get("handoff"):
             handoff = True
             if live:
@@ -263,11 +274,19 @@ def _run_conversation(scenario: dict[str, Any], persona_key: str, identity: dict
     return {
         "customer_id": cid,
         "hidden_persona": persona_disp,  # what the buyer secretly was; closer never saw it
+        "persona_seed": persona_seed,    # the buyer's secret agenda (for the outcome judge)
         "buyer": f"{identity['name']}（{identity.get('org') or identity['role']}）",
         "country": identity["country"],
         "scenario": scenario["product"]["name"],
         "handoff": handoff,
         "final_stage": final_stage,
+        "degraded_turns": degraded_turns,
+        "turns_done": turns_done,
+        # A conversation is "valid" for win-rate purposes only if the closer never
+        # fell back to a canned holding line — a single LLM blip mid-deal pollutes
+        # the result (the buyer never got a real answer), so we report those
+        # separately instead of scoring them as a lost sale.
+        "valid": degraded_turns == 0,
         "learned": learned,
         "transcript": store.transcript(cid, limit=80),
     }
@@ -415,6 +434,77 @@ def _judge(convo: dict[str, Any], models: list[str] | None = None) -> dict[str, 
     }
 
 
+_OUTCOME_ORDER = {"committed": 3, "progressing": 2, "stalled": 1, "lost": 0}
+_OUTCOME_LABEL = {
+    "committed": "成交/承诺下一步", "progressing": "在推进/动心",
+    "stalled": "卡住/再看看", "lost": "已劝退/流失",
+}
+
+
+def _buyer_outcome(convo: dict[str, Any], models: list[str] | None = None) -> dict[str, Any]:
+    """Independent, BUYER-SIDE deal outcome — the most honest proxy for real win
+    rate. We ask the model to *be* the same buyer (with the same hidden persona it
+    secretly held) and, now that the chat is over, decide what it would ACTUALLY
+    do next. This never reads the closer's self-reported win_score, so an
+    over-optimistic closer can't inflate it; running it on a de-correlated judge
+    model further removes self-grading bias.
+
+    close_rate = committed / N (an actual concrete commitment),
+    advance_rate = (committed + progressing) / N."""
+    if not llm.llm_available():
+        return {"outcome": "unknown", "intent": -1, "committed": False, "reason": "", "deal_killer": ""}
+    persona = convo.get("hidden_persona", "")
+    seed = convo.get("persona_seed", "")
+    system = (
+        "你就是刚才那段对话里的『客户』本人——对话已经结束。你（对销售一直保密的）真实性格/底牌是："
+        f"{persona} —— {seed}。现在凭你真实的内心、按你这种人会有的真实反应，诚实判断这场谈下来你接下来到底会怎么做。"
+        "别给销售面子、别客气：真实买家大多不会当场就买，被烦到/没被打动就会拖或走。\n"
+        "判定标准（从严）：committed=你确实答应了一个具体下一步并真打算照做（约好演示/试用、同意下单或付定金、"
+        "让对方发合同/PO 并会回）；progressing=有点动心、倾向推进但还没给确定承诺；stalled=没被打动、"
+        "『我再看看/考虑下』式拖着、无实质进展；lost=已被劝退/不会买/懒得再回的程度。\n"
+        "只输出 JSON：outcome(committed|progressing|stalled|lost)、intent(0-100 你此刻真实的购买/推进意愿)、"
+        "committed_next_step(布尔，你是否真的会去做销售提议的那个下一步)、"
+        "reason(一句话：你为什么会/不会推进)、"
+        "deal_killer(让你没能当场被拿下的最大那一个原因；若你 committed 则填\"\")。"
+    )
+    user = (f"【你和这个销售的完整对话】(\u201c我\u201d=销售/对方, \u201c客户\u201d=你)\n{convo['transcript']}\n\n"
+            "对话结束了，你接下来真实会怎么做？")
+    outcomes: list[str] = []
+    intents: list[int] = []
+    commits: list[bool] = []
+    reasons: list[str] = []
+    killers: list[str] = []
+    for mdl in (models or [None]):
+        try:
+            data = llm.chat_json(system, user, temperature=0.3, model=mdl)
+        except Exception:  # noqa: BLE001
+            continue
+        o = str(data.get("outcome", "")).strip().lower()
+        if o in _OUTCOME_ORDER:
+            outcomes.append(o)
+        try:
+            intents.append(int(data.get("intent", -1)))
+        except (TypeError, ValueError):
+            pass
+        commits.append(bool(data.get("committed_next_step")))
+        if data.get("reason"):
+            reasons.append(str(data.get("reason")))
+        if data.get("deal_killer"):
+            killers.append(str(data.get("deal_killer")))
+    if not outcomes:
+        return {"outcome": "unknown", "intent": -1, "committed": False, "reason": "", "deal_killer": ""}
+    outcome = max(set(outcomes), key=outcomes.count)
+    valid_intent = [v for v in intents if v >= 0]
+    return {
+        "outcome": outcome,
+        "intent": round(statistics.mean(valid_intent)) if valid_intent else -1,
+        "committed": (sum(commits) > len(commits) / 2) or outcome == "committed",
+        "reason": reasons[0] if reasons else "",
+        "deal_killer": killers[0] if killers else "",
+        "judges": len(outcomes),
+    }
+
+
 def _build_cases(args: Any, rng: random.Random) -> list[dict[str, Any]]:
     """Assemble the conversation cases for this run, honoring the anti-overfit
     source/split. Each case = {scenario, identity, persona_key, persona_override}."""
@@ -492,31 +582,64 @@ def main() -> None:
                                   persona_override=c.get("persona_override"))
         convo["judge"] = _judge(convo, models=judge_models)
         convo["ai_detect"] = _ai_suspicion(convo, models=judge_models)
+        convo["outcome"] = _buyer_outcome(convo, models=judge_models)
         convos.append(convo)
         s = convo["judge"]["scores"]
         avg = round(statistics.mean(s.values()), 1) if s else 0
         susp = convo["ai_detect"]["ai_suspicion"]
+        oc = convo["outcome"]
         print(f"  [{convo['scenario'][:14]:<14}] {convo['buyer'][:18]:<18} {convo['country']:<13} "
-              f"效果avg={avg:<4} 被识破AI={susp}%({convo['ai_detect'].get('verdict','')}) "
+              f"效果avg={avg:<4} 被识破AI={susp}% "
+              f"结局={_OUTCOME_LABEL.get(oc.get('outcome',''), oc.get('outcome',''))}(意愿{oc.get('intent','?')}) "
               f"handoff={convo['handoff']} stage={convo['final_stage']} (隐藏人设={convo['hidden_persona']})", flush=True)
+        if oc.get("deal_killer"):
+            print(f"        ✗ 没拿下的原因: {oc['deal_killer']}", flush=True)
 
-    # aggregate
+    # aggregate — win-rate / dims / suspicion are computed over VALID conversations
+    # only. A conversation where the closer fell back to a canned holding line
+    # (LLM blip) never gave the buyer a real answer, so scoring it as a lost sale
+    # would slander the closer; we exclude it from the headline and report the
+    # count of degraded conversations separately for full transparency.
+    valid_convos = [c for c in convos if c.get("valid", True)]
+    degraded_convos = [c for c in convos if not c.get("valid", True)]
+    scored = valid_convos or convos  # never divide by zero; fall back to all if every convo degraded
     per_dim: dict[str, list[int]] = {d: [] for d in _JUDGE_DIMS}
-    for c in convos:
+    for c in scored:
         for d, v in c["judge"]["scores"].items():
             per_dim[d].append(v)
     dim_avg = {d: round(statistics.mean(v), 2) if v else 0 for d, v in per_dim.items()}
     weakest = sorted(dim_avg.items(), key=lambda kv: kv[1])[:2]
-    all_issues = [i for c in convos for i in c["judge"].get("issues", [])]
-    handoff_rate = round(sum(c["handoff"] for c in convos) / max(1, len(convos)), 2)
-    susp_vals = [c["ai_detect"]["ai_suspicion"] for c in convos if c["ai_detect"]["ai_suspicion"] >= 0]
+    all_issues = [i for c in scored for i in c["judge"].get("issues", [])]
+    handoff_rate = round(sum(c["handoff"] for c in scored) / max(1, len(scored)), 2)
+    susp_vals = [c["ai_detect"]["ai_suspicion"] for c in scored if c["ai_detect"]["ai_suspicion"] >= 0]
     ai_suspicion_avg = round(statistics.mean(susp_vals), 1) if susp_vals else -1
-    all_tells = [t for c in convos for t in c["ai_detect"].get("tells", [])]
+    all_tells = [t for c in scored for t in c["ai_detect"].get("tells", [])]
     learned_total = [ls for c in convos for ls in c.get("learned", [])]
+
+    # Independent buyer-side outcomes → the honest win/advance rate (valid convos only).
+    outcomes = [c.get("outcome", {}).get("outcome", "unknown") for c in scored]
+    n_scored = sum(1 for o in outcomes if o in _OUTCOME_ORDER)
+    won = sum(1 for o in outcomes if o == "committed")
+    progressing = sum(1 for o in outcomes if o == "progressing")
+    close_rate = round(won / n_scored, 2) if n_scored else -1
+    advance_rate = round((won + progressing) / n_scored, 2) if n_scored else -1
+    intent_vals = [c["outcome"]["intent"] for c in scored if c.get("outcome", {}).get("intent", -1) >= 0]
+    buyer_intent_avg = round(statistics.mean(intent_vals), 1) if intent_vals else -1
+    outcome_breakdown = {k: outcomes.count(k) for k in _OUTCOME_ORDER if outcomes.count(k)}
+    deal_killers = [c["outcome"]["deal_killer"] for c in scored if c.get("outcome", {}).get("deal_killer")]
+    degraded_total = sum(c.get("degraded_turns", 0) for c in convos)
 
     report = {
         "summary": {
             "conversations": len(convos),
+            "valid_conversations": len(valid_convos),       # 未受接口抖动污染、计入赢率的对话数
+            "degraded_conversations": len(degraded_convos),  # 因 LLM 兜底被剔除的对话数
+            "degraded_turns_total": degraded_total,
+            "close_rate": close_rate,         # 买家独立判定真成交(承诺具体下一步)的比例
+            "advance_rate": advance_rate,     # 成交+在推进 的比例
+            "buyer_intent_avg": buyer_intent_avg,  # 买家自评购买/推进意愿 0-100
+            "outcome_breakdown": outcome_breakdown,
+            "win_rate_note": "仅统计 valid 对话(closer未兜底);买家视角独立判定(不读销冠自报win_score),de-correlated裁判时更客观",
             "dimension_avg": dim_avg,
             "weakest_dimensions": [w[0] for w in weakest],
             "handoff_rate": handoff_rate,
@@ -524,10 +647,11 @@ def main() -> None:
             "ai_suspicion_note": "诊断指标(客户视角),仅用于发现方向,不作为提示词优化目标",
         },
         "config": {
-            "source": args.source, "split": args.split, "learn": args.learn,
+            "source": args.source, "split": args.split, "learn": args.learn, "turns": args.turns,
             "judge_models": judge_models or [llm.model_name()],
             "closer_model": llm.model_name(),
         },
+        "top_deal_killers": deal_killers[:20],
         "top_issues": all_issues[:20],
         "ai_tells": all_tells[:20],
         "lessons_learned": learned_total,
@@ -538,6 +662,18 @@ def main() -> None:
     print("\n=== 维度均分（效果，0-10）===", flush=True)
     for d, v in dim_avg.items():
         print(f"  {d:<20} {v}", flush=True)
+    print("\n=== 成交结果（买家独立判定，不读销冠自报赢率）===", flush=True)
+    if degraded_convos:
+        print(f"  ⚠ 已剔除 {len(degraded_convos)} 段故障对话（共 {degraded_total} 个兜底回合，接口抖动），"
+              f"赢率仅基于 {len(valid_convos)} 段有效对话", flush=True)
+    print(f"  真·成单率(close_rate)   {close_rate}  ← 买家答应了具体下一步/下单/付定金", flush=True)
+    print(f"  推进率(advance_rate)    {advance_rate}  ← 成交+明显动心在推进", flush=True)
+    print(f"  买家购买意愿均值        {buyer_intent_avg}/100", flush=True)
+    print(f"  结局分布                {outcome_breakdown}", flush=True)
+    if deal_killers:
+        print("  没拿下的主要原因:", flush=True)
+        for k in deal_killers[:8]:
+            print(f"    ✗ {k}", flush=True)
     print(f"\n【客户视角·被识破是AI的概率·诊断】平均 {ai_suspicion_avg}%（越低越像真人；仅诊断，不作优化目标）", flush=True)
     print(f"最弱维度: {[w[0] for w in weakest]} | 转人工率: {handoff_rate} | "
           f"数据源={args.source}/{args.split} | 本轮新学经验={len(learned_total)} 条 "
